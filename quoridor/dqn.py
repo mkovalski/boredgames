@@ -21,7 +21,7 @@ class DQNAgent:
         self.nmoves_size = nmoves_size
         self.action_size = action_size
 
-        self.memory = deque(maxlen=10000)
+        self.memory = deque(maxlen=50000)
         self.gamma = 0.95    # discount rate
         self.epsilon = 1.0  # exploration rate
         self.epsilon_min = 0.01
@@ -109,6 +109,7 @@ class DQNAgent:
         return "Training hasn't started"
 
     def evaluate(self, env, eval_games = 10):
+        env.reset(player = 1)
         nwins = 0
 
         for i in range(eval_games):
@@ -158,9 +159,9 @@ def train():
     
     for e in range(1, EPISODES + 1):
         agent.reset()
-        state = env.reset(player = 1, move_prob = [np.random.random(), np.random.random()])
+        state = env.reset(player = 1,
+                          move_prob = [np.random.random(), np.random.random()])
         done = False
-        agent.train_loss = 0
 
         while not done:
             action = agent.act(state, env)
@@ -175,10 +176,8 @@ def train():
 
             agent.replay(batch_size)
 
-        if e % 10 == 0:
-            agent.save("./save/latest-quoridor-dqn.h5")
         if e % 100 == 0:
-            env.reset(player = 1)
+            agent.save("./save/latest-quoridor-dqn.h5")
             agent.evaluate(env)
 
 def evaluate(model_path):
@@ -193,7 +192,7 @@ def evaluate(model_path):
     os.makedirs(eval_dir)
 
     agent.reset()
-    env.reset(player = 1 )
+    env.reset(player = 1)
 
     count = 0
 
@@ -219,6 +218,7 @@ def evaluate(model_path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+
     parser.add_argument('--evaluate', action = 'store_true')
     parser.add_argument('--model', type = str, default = None)
 
@@ -229,6 +229,3 @@ if __name__ == "__main__":
     else:
         assert(os.path.isfile(args.model))
         evaluate(args.model)
-
-
-

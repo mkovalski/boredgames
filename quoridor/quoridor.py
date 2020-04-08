@@ -34,7 +34,7 @@ class Player():
         self.curr_loc = copy(self._init_loc)
         self.nmoves = self.MAX_MOVES
         self.move_prob = move_prob
-        if self.move_prob is not None and self.move_prob < 0.1:
+        if self.move_prob is not None and self.move_prob < 0.05:
             self.move_prob = None
 
     def dec_moves(self):
@@ -90,8 +90,8 @@ class Quoridor():
     DTYPE = np.int8
 
     OPEN = 0
-    NOWALL = -9 #np.iinfo(DTYPE).min
-    WALL = 9 #np.iinfo(DTYPE).max
+    NOWALL = -8 #np.iinfo(DTYPE).min
+    WALL = 8 #np.iinfo(DTYPE).max
     
     EXPLORED = -2
     PLAYER1 = 1
@@ -311,7 +311,7 @@ class Quoridor():
         
         # Multiprocessing
         indices = np.where(self.valid_walls == 1)[0]
-        with mp.Pool(8) as pool:
+        with mp.Pool(7) as pool:
             res = pool.map(self.is_valid_wall, list(indices))
 
         self.per_move_valid_walls[indices] = res
@@ -338,7 +338,7 @@ class Quoridor():
         return res
 
     def __add_wall__(self, wall):
-        if self.board[wall.start] != self.NOWALL or self.board[wall.end] != self.NOWALL:
+        if self.board[wall.start] != self.NOWALL or self.board[wall.mid] != self.NOWALL or self.board[wall.end] != self.NOWALL:
             print("YUGE ERROR")
             sys.exit(2)
         self.board[wall.start] = self.WALL
