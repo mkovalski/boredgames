@@ -4,12 +4,13 @@ import numpy as np
 from keras.layers import Input, Conv2D, Flatten, Add, Dense
 from keras.layers.core import RepeatVector
 from keras.models import Model
+from keras.optimizers import RMSprop
 import keras.backend as K
 from quoridor import Quoridor
 
 class NN():
     def __init__(self, board_shape, tile_shape, output_shape,
-                 n_conv_layers = 4,
+                 n_conv_layers = 2,
                  base_conv_filters = 4,
                  merge_dim = 256,
                  activation = 'relu'):
@@ -44,17 +45,16 @@ class NN():
         output = Add()([output, tile_output])
         
         # Two dense layers
-        output = Dense(output_shape[0])(output)
+        output = Dense(output_shape[0], activation = activation)(output)
             
-        # Softmax
-        output = Dense(output_shape[0], activation = 'softmax')(output)
+        # Output
+        output = Dense(output_shape[0])(output)
         
         self.model = Model(inputs = [board_input, tile_input],
                            outputs = output)
-        self.model.compile(optimizer = 'adam',
-                           loss = 'binary_crossentropy',
+        self.model.compile(optimizer = RMSprop(learning_rate=0.0001),
+                           loss = 'mse',
                            metrics = ['accuracy'])
-
     
     def get_model(self):
         return self.model

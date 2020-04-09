@@ -8,6 +8,9 @@ from PIL import Image, ImageDraw
 import argparse
 import time
 import multiprocessing as mp
+from functools import lru_cache
+from numba import jit
+from lib import set_valid_walls
 
 # TODO: Speed up by writing in C++
 # DFS for each move is the bottleneck
@@ -31,7 +34,7 @@ class Player():
         self.move_prob = None
 
     def reset(self, move_prob = None):
-        self.curr_loc = copy(self._init_loc)
+        self.curr_loc = np.copy(self._init_loc)
         self.nmoves = self.MAX_MOVES
         self.move_prob = move_prob
         if self.move_prob is not None and self.move_prob < 0.05:
@@ -108,16 +111,18 @@ class Quoridor():
         self.board = np.zeros((self.N*2-1, self.N*2-1), dtype = self.DTYPE)
         self.player_map = {}
         
-        player1_loc = [self.board.shape[0] - 1, self.N - 1]
-        player2_loc = [0, self.N - 1]
+        player1_loc = np.asarray([self.board.shape[0] - 1, self.N - 1])
+        player2_loc = np.asarray([0, self.N - 1])
         
         self.player_map[self.PLAYER1] = Player(self.PLAYER1, player1_loc, 0)
         self.player_map[self.PLAYER2] = Player(self.PLAYER2, player2_loc, self.board.shape[0] - 1)
 
-        self.wall_array = self.create_wall_array()
+        self.wall_array, self.expanded_wall_array = self.create_wall_array()
 
         self.valid_walls = None
         self.per_move_valid_walls = None
+
+        self.use_pooling = False
 
         # Renderings
 
@@ -194,7 +199,8 @@ class Quoridor():
                 count += 1
 
         assert(count == self.max_wall_positions)
-        return arr
+        
+        return arr, np.asarray([[x.start, x.mid, x.end] for x in arr])
     
     @property
     def max_wall_positions(self):
@@ -207,16 +213,15 @@ class Quoridor():
 
     def __str__(self):
         return str(self.board)
-
+    
     def can_complete(self, player):
         self.complete_cache = {}
-        board = np.copy(self.board)
 
         return self.dfs(self.player_map[player].curr_loc[0],
                         self.player_map[player].curr_loc[1],
-                        player, board)
+                        player)
     
-    def dfs(self, i, j, player, board):
+    def dfs(self, i, j, player):
         if (i, j) in self.complete_cache:
             return self.complete_cache[(i, j)]
 
@@ -224,16 +229,16 @@ class Quoridor():
             self.complete_cache[(i, j)] = True
             return True
         
-        prev = board[i, j]
-        board[i, j] = self.EXPLORED
+        prev = self.board[i, j]
+        self.board[i, j] = self.EXPLORED
         
-        for x, y in self.get_neighbors(i, j, board = board)[0]:
-            if self.dfs(x, y, player, board):
-                board[i, j] = prev
+        for x, y in self.get_neighbors(i, j, board = self.board)[0]:
+            if self.dfs(x, y, player):
+                self.board[i, j] = prev
                 self.complete_cache[(i, j)] = True
                 return True
         
-        board[i, j] = prev
+        self.board[i, j] = prev
         self.complete_cache[(i, j)] = False
         return False
     
@@ -302,8 +307,7 @@ class Quoridor():
         
         self.per_move_valid_walls[:] = 1
         
-        # TODO: Optimize
-        # Once for the 
+        # Once for the spaces we can't use
         for idx, wall in enumerate(self.wall_array):
             if self.valid_walls[idx] == 1:
                 if self.board[wall.start] == self.WALL or self.board[wall.mid] == self.WALL or self.board[wall.end] == self.WALL:
@@ -311,30 +315,30 @@ class Quoridor():
         
         # Multiprocessing
         indices = np.where(self.valid_walls == 1)[0]
-        with mp.Pool(7) as pool:
-            res = pool.map(self.is_valid_wall, list(indices))
+        #per_move_valid_walls = copy(self.per_move_valid_walls)
 
-        self.per_move_valid_walls[indices] = res
+        #for idx in indices:
+        #    per_move_valid_walls[idx] = self.is_valid_wall(idx)
         
-        '''
-        for idx, wall in enumerate(self.wall_array):
-            if self.valid_walls[idx] == 1:
-                tmpWall = self.wall_array[idx]
-                self.__add_wall__(tmpWall)
-                if not all(self.can_complete(k) for k in self.player_map.keys()):
-                    self.per_move_valid_walls[idx] = 0
-                self.__remove_wall__(tmpWall)
-        '''
+        #t1 = time.time()
+        set_valid_walls(indices, self.per_move_valid_walls, self.board, 
+                        self.expanded_wall_array, self.player_map[1].curr_loc,
+                        self.player_map[2].curr_loc)
+        #print(time.time() - t1)
+        #assert(all(per_move_valid_walls == self.per_move_valid_walls))
+
         self.per_move_valid_walls *= self.valid_walls
-    
+        
     def is_valid_wall(self, idx):
         res = 1
         tmpWall = self.wall_array[idx]
         self.__add_wall__(tmpWall)
-        if not all(self.can_complete(k) for k in self.player_map.keys()):
+        
+        res = 1
+        if not all(self.can_complete(i) for i in self.player_map.keys()):
             res = 0
-            #self.per_move_valid_walls[idx] = 0
         self.__remove_wall__(tmpWall)
+
         return res
 
     def __add_wall__(self, wall):
@@ -382,7 +386,7 @@ class Quoridor():
                 return
 
             # Mask available moves as 0, add epsilon, renormalize
-            move *= avail_moves
+            move[np.where(avail_moves == 0)] = float('-inf')
             idx = np.argmax(move)
 
             if idx >= len(move) - 4:
@@ -541,16 +545,18 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     game = Quoridor(N = args.N, )
-    game.reset()
-    
-    player = 1
 
-    while not game.done:
-        sample = game.sample(player)
-        game.move(player, sample)
-        # Ew
-        player += 1
-        if player >= 3:
-            player = 1
+    for i in range(100):
+        game.reset()
         
-    print(game.board)
+        player = 1
+
+        while not game.done:
+            sample = game.sample(player)
+            game.move(player, sample)
+            # Ew
+            player += 1
+            if player >= 3:
+                player = 1
+            
+        print(game.board)
