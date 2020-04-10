@@ -8,6 +8,7 @@ from keras.optimizers import Adam
 from quoridor import Quoridor
 from nn import NN
 import os
+import sys
 import time
 import multiprocessing as mp
 import argparse
@@ -15,14 +16,16 @@ from tqdm import tqdm
 import pickle
 
 EPISODES = 10000
+SAVEROOT = 'save'
+
 class DQNAgent:
-    def __init__(self, board_size, nmoves_size, action_size, 
-                 maxlen = 1000000, 
-                 episodes = 10000,
-                 gamma = 0.95,
+    def __init__(self, board_size, nmoves_size, action_size,
+                 model_path = None,
+                 maxlen = 20000, 
+                 gamma = 0.99,
                  epsilon = 1.0,
                  epsilon_min = 0.1,
-                 epsilon_decay = 0.9999999,
+                 epsilon_decay = 0.999999,
                  use_pooling = True):
 
         self.board_size = board_size
@@ -35,17 +38,20 @@ class DQNAgent:
         self.epsilon_min = epsilon_min
         self.epsilon_decay = epsilon_decay
         self.model = NN(board_size, nmoves_size, action_size).get_model()
+        self.model_path = model_path
 
         self.train_loss = 0
         self.nsteps = 0
+
+        self.target_model = clone_model(self.model)
+    
+    def update_target(self):
         self.target_model = clone_model(self.model)
 
-        self.use_pooling = use_pooling
-    
     def reset(self):
         self.train_loss = 0
         self.nsteps = 0
-        self.target_model = clone_model(self.model)
+        self.update_target()
 
     def memorize(self, state, action, reward, next_state, done):
         self.memory.append((state, action, reward, next_state, done))
@@ -108,6 +114,7 @@ class DQNAgent:
         target_f[x_indices, y_indices] = target
         
         hist = self.model.fit([state[0], state[1]], target_f, epochs=1, verbose=0)
+
         self.train_loss += hist.history['loss'][0]
         self.nsteps += 1
 
@@ -138,8 +145,8 @@ class DQNAgent:
     def load(self, name):
         self.model.load_weights(name)
 
-    def save(self, name):
-        self.model.save_weights(name)
+    def save(self):
+        self.model.save_weights(self.model_path)
 
 def populate_rb():
     env = Quoridor()
@@ -148,7 +155,7 @@ def populate_rb():
 
     agent = DQNAgent(board_shape, tile_shape, action_shape)
     done = False
-    batch_size = 256
+    batch_size = 32
 
     # Fill up the replay buffer
     done = True
@@ -172,12 +179,13 @@ def populate_rb():
         pickle.dump(agent.memory, myFile)
 
 
-def train(rb = None, offpolicy = False):
+def train(model_path, rb = None, offpolicy = False):
     env = Quoridor()
     board_shape, tile_shape = env.state_shape()
     action_shape = env.action_shape()
 
-    agent = DQNAgent(board_shape, tile_shape, action_shape)
+    agent = DQNAgent(board_shape, tile_shape, action_shape,
+                     model_path = model_path)
     done = False
     batch_size = 32
 
@@ -230,7 +238,7 @@ def train(rb = None, offpolicy = False):
 
 
         if e % 100 == 0:
-            agent.save("./save/tdqn-quoridor-dqn.h5")
+            agent.save()
             agent.evaluate(env)
 
 def train_off_policy(agent, batch_size):
@@ -279,19 +287,27 @@ def evaluate(model_path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-
+    
+    parser.add_argument('--model_path', type = str, required = True)
     parser.add_argument('--evaluate', action = 'store_true')
     parser.add_argument('--rb', type = str, default = None)
     parser.add_argument('--offpolicy', action = 'store_true')
-    parser.add_argument('--model', type = str, default = None)
 
     args = parser.parse_args()
+
+    full_path = os.path.join(SAVEROOT, args.model_path)
     
     if args.rb is not None:
         assert(os.path.isfile(args.rb))
 
     if not args.evaluate:
-        train(rb = args.rb, offpolicy = args.offpolicy)
+        if os.path.isdir(full_path):
+            print("{} already exists! Cannot save".format(full_path))
+            sys.exit(2)
+        os.makedirs(full_path)
+        full_path = os.path.join(full_path, 'model.h5') 
+        train(rb = args.rb, offpolicy = args.offpolicy, model_path = full_path)
     else:
-        assert(os.path.isfile(args.model))
-        evaluate(args.model)
+        model_path = os.path.join(args.model_path, 'model.h5')
+        assert(os.path.isfile(model_path))
+        evaluate(model_path)

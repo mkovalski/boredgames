@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 import numpy as np
-from keras.layers import Input, Conv2D, Flatten, Add, Dense
+from keras.layers import Input, Conv2D, Flatten, Add, Dense, MaxPooling2D
 from keras.layers.core import RepeatVector
 from keras.models import Model
 from keras.optimizers import RMSprop
@@ -10,7 +10,7 @@ from quoridor import Quoridor
 
 class NN():
     def __init__(self, board_shape, tile_shape, output_shape,
-                 n_conv_layers = 2,
+                 n_conv_layers = 3,
                  base_conv_filters = 4,
                  merge_dim = 256,
                  activation = 'relu'):
@@ -24,12 +24,14 @@ class NN():
         for i in range(1, n_conv_layers + 1):
             filters = base_conv_filters ** i
             output = Conv2D(filters = filters,
-                            kernel_size = 5, 
+                            kernel_size = 3, 
                             strides = 1,
-                            padding = 'valid',
+                            padding = 'same',
                             activation = activation)(inp)
-            inp = output
+            output = MaxPooling2D()(output)
 
+            inp = output
+        
         
         sh = np.prod(output.shape.as_list()[1:])
         output = Flatten()(output)
