@@ -6,6 +6,7 @@ from keras.layers.core import RepeatVector
 from keras.losses import Huber
 from keras.models import Model
 from keras.optimizers import RMSprop
+from tensorflow.losses import huber_loss
 import keras.backend as K
 from quoridor import Quoridor
 
@@ -55,7 +56,7 @@ class NN():
         self.model = Model(inputs = [board_input, tile_input],
                            outputs = output)
         self.model.compile(optimizer = RMSprop(learning_rate=0.0001),
-                           loss = 'mse',
+                           loss = huber_loss,
                            metrics = ['accuracy'])
     
     def get_model(self):

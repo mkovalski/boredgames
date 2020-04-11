@@ -22,7 +22,7 @@ PLAYER = 1
 class DQNAgent:
     def __init__(self, board_size, nmoves_size, action_size,
                  model_path = None,
-                 maxlen = 200000, 
+                 buffer_size = 20000, 
                  gamma = 0.99,
                  epsilon = 1.0,
                  epsilon_min = 0.1,
@@ -33,8 +33,9 @@ class DQNAgent:
         self.board_size = board_size
         self.nmoves_size = nmoves_size
         self.action_size = action_size
+        self.batch_size = batch_size
 
-        self.memory = deque(maxlen=maxlen)
+        self.memory = deque(maxlen=buffer_size)
         self.gamma = gamma    # discount rate
         self.epsilon = epsilon  # exploration rate
         self.epsilon_min = epsilon_min
@@ -112,11 +113,8 @@ class DQNAgent:
         next_target = self.target_model.predict([next_state[0], next_state[1]])
         next_target += ((1 - next_avail_moves) * -1e9)
         next_target = np.amax(next_target, axis = 1)
-
-        target = (self.gamma * next_target)
-
-        indices = np.where(done)
-        target[indices] = reward[indices]
+        
+        target = reward + ((1 - done) * (self.gamma * next_target))
 
         target_f = self.target_model.predict([state[0], state[1]])
 
@@ -194,14 +192,15 @@ def populate_rb():
 
 
 def train(model_path, rb = None, offpolicy = False,
-          batch_size = 32):
+          batch_size = 32, buffer_size = 20000):
     env = Quoridor()
     board_shape, tile_shape = env.state_shape()
     action_shape = env.action_shape()
 
     agent = DQNAgent(board_shape, tile_shape, action_shape,
                      model_path = model_path,
-                     batch_size = batch_size)
+                     batch_size = batch_size,
+                     buffer_size = buffer_size)
     done = False
 
     # Fill up the replay buffer
@@ -312,6 +311,7 @@ if __name__ == "__main__":
     parser.add_argument('--model_path', type = str, required = True)
     parser.add_argument('--evaluate', action = 'store_true')
     parser.add_argument('--rb', type = str, default = None)
+    parser.add_argument('--buffer_size', type = int, default = 10000)
     parser.add_argument('--offpolicy', action = 'store_true')
     parser.add_argument('--batch_size', default = 32, type = int)
 
@@ -329,7 +329,8 @@ if __name__ == "__main__":
         os.makedirs(full_path)
         full_path = os.path.join(full_path, 'model.h5') 
         train(rb = args.rb, offpolicy = args.offpolicy, model_path = full_path,
-              batch_size = args.batch_size)
+              batch_size = args.batch_size,
+              buffer_size = args.buffer_size)
     else:
         model_path = os.path.join(args.model_path, 'model.h5')
         assert(os.path.isfile(model_path))
