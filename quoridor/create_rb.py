@@ -30,16 +30,18 @@ def populate_rb(N):
     for i in tqdm(range(agent.memory.maxlen)):
         if done:
             agent.reset()
-            state = env.reset(player = 1,
+            state, avail_moves = env.reset(player = 1,
                               move_prob = [np.random.random(), np.random.random()])
             done = False
         
         action = agent.act(state, env)
         
-        next_state, avail_moves, reward, done, _ = env.step(1, action)
+        next_state, next_avail_moves, reward, done, _ = env.step(1, action)
 
-        agent.memorize(state, avail_moves, action, reward, next_state, done)
+        agent.memorize(state, avail_moves, action, reward, next_state, next_avail_moves, done)
+
         state = next_state
+        avail_moves = next_avail_moves
     
     with open('rb.pkl', 'wb') as myFile:
         pickle.dump(agent.memory, myFile)
