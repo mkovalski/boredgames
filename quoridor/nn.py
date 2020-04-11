@@ -3,6 +3,7 @@
 import numpy as np
 from keras.layers import Input, Conv2D, Flatten, Concatenate, Dense, MaxPooling2D
 from keras.layers.core import RepeatVector
+from keras.losses import Huber
 from keras.models import Model
 from keras.optimizers import RMSprop
 import keras.backend as K

@@ -22,10 +22,11 @@ PLAYER = 1
 class DQNAgent:
     def __init__(self, board_size, nmoves_size, action_size,
                  model_path = None,
-                 maxlen = 20000, 
+                 maxlen = 200000, 
                  gamma = 0.99,
                  epsilon = 1.0,
                  epsilon_min = 0.1,
+                 batch_size = 32,
                  epsilon_decay = 0.999999,
                  use_pooling = True):
 
@@ -104,9 +105,9 @@ class DQNAgent:
                batch_dict['reward'], batch_dict['next_state'], batch_dict['next_avail_moves'], \
                batch_dict['done']
 
-    def replay(self, batch_size):
+    def replay(self):
         # Stack em, train as batches
-        state, avail_moves, action, reward, next_state, next_avail_moves, done = self.get_batch(batch_size)
+        state, avail_moves, action, reward, next_state, next_avail_moves, done = self.get_batch(self.batch_size)
         
         next_target = self.target_model.predict([next_state[0], next_state[1]])
         next_target += ((1 - next_avail_moves) * -1e9)
@@ -137,7 +138,7 @@ class DQNAgent:
             return self.train_loss / self.nsteps
         return "Training hasn't started"
 
-    def evaluate(self, env, eval_games = 20):
+    def evaluate(self, env, eval_games = 50):
         nwins = 0
 
         for i in range(eval_games):
@@ -167,7 +168,7 @@ def populate_rb():
 
     agent = DQNAgent(board_shape, tile_shape, action_shape)
     done = False
-    batch_size = 32
+    batch_size = 512
 
     # Fill up the replay buffer
     done = True
@@ -192,15 +193,16 @@ def populate_rb():
         pickle.dump(agent.memory, myFile)
 
 
-def train(model_path, rb = None, offpolicy = False):
+def train(model_path, rb = None, offpolicy = False,
+          batch_size = 32):
     env = Quoridor()
     board_shape, tile_shape = env.state_shape()
     action_shape = env.action_shape()
 
     agent = DQNAgent(board_shape, tile_shape, action_shape,
-                     model_path = model_path)
+                     model_path = model_path,
+                     batch_size = batch_size)
     done = False
-    batch_size = 32
 
     # Fill up the replay buffer
     done = True
@@ -250,7 +252,7 @@ def train(model_path, rb = None, offpolicy = False):
                 print("episode: {}/{}, e: {:.2}, nsteps: {}, loss: {}"
                       .format(e, EPISODES, agent.epsilon, agent.nsteps, agent.get_loss()))
 
-            agent.replay(batch_size)
+            agent.replay()
 
         if e % 50 == 0:
             win_percentage = agent.evaluate(env)
@@ -311,6 +313,7 @@ if __name__ == "__main__":
     parser.add_argument('--evaluate', action = 'store_true')
     parser.add_argument('--rb', type = str, default = None)
     parser.add_argument('--offpolicy', action = 'store_true')
+    parser.add_argument('--batch_size', default = 32, type = int)
 
     args = parser.parse_args()
 
@@ -325,7 +328,8 @@ if __name__ == "__main__":
             sys.exit(2)
         os.makedirs(full_path)
         full_path = os.path.join(full_path, 'model.h5') 
-        train(rb = args.rb, offpolicy = args.offpolicy, model_path = full_path)
+        train(rb = args.rb, offpolicy = args.offpolicy, model_path = full_path,
+              batch_size = args.batch_size)
     else:
         model_path = os.path.join(args.model_path, 'model.h5')
         assert(os.path.isfile(model_path))
