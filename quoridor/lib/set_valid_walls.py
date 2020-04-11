@@ -65,9 +65,9 @@ def get_neighbors(i, j, board):
     ret = np.zeros(len(walls), dtype = np.uint8)
     ret_locs = []
 
-    for i in range(len(locs)):
-        loc = locs[i]
-        wall = walls[i]
+    for idx in range(len(locs)):
+        loc = locs[idx]
+        wall = walls[idx]
 
         if 0 <= loc[0] < board.shape[0] and 0 <= loc[1] < board.shape[1] and \
             board[wall[0], wall[1]] == -8 and board[loc[0], loc[1]] != -2:
