@@ -11,9 +11,7 @@ import multiprocessing as mp
 from functools import lru_cache
 from numba import jit
 from lib import set_valid_walls
-
-# TODO: Speed up by writing in C++
-# DFS for each move is the bottleneck
+from collections import deque
 
 def verbose_print(string):
     if os.environ.get("VERBOSE") == 1:
@@ -104,9 +102,13 @@ class Quoridor():
 
     MOVEDIRS = ['left', 'up', 'down', 'right']
 
-    def __init__(self, N = 9):
+    def __init__(self, N = 9,
+                 players = 2,
+                 max_moves = 1000):
+
         assert(N % 2 == 1)
         self.N = N
+        self.max_moves = max_moves
 
         self.board = np.zeros((self.N*2-1, self.N*2-1), dtype = self.DTYPE)
         self.player_map = {}
@@ -116,24 +118,21 @@ class Quoridor():
         
         self.player_map[self.PLAYER1] = Player(self.PLAYER1, player1_loc, 0)
         self.player_map[self.PLAYER2] = Player(self.PLAYER2, player2_loc, self.board.shape[0] - 1)
-
         self.wall_array, self.expanded_wall_array = self.create_wall_array()
 
         self.valid_walls = None
         self.per_move_valid_walls = None
+        self.nmoves = 0
 
-        self.use_pooling = False
-
-        # Renderings
-
-        self.reset()
+        self.reset(1)
     
     def reset(self, player = None, move_prob = None):
         self.done = False
         self.winner = None
+        self.nmoves = 0
 
         if not isinstance(move_prob, list):
-            move_prob = [move_prob]
+            move_prob = [move_prob, move_prob]
 
         # Clear board, setup wall spaces
         self.board[:] = self.OPEN
@@ -144,17 +143,18 @@ class Quoridor():
         self.per_move_valid_walls = np.ones(self.max_wall_positions, dtype = np.uint8)
         
         for k in self.player_map.keys():
-            player = self.player_map[k]
-            player.reset(move_prob[k-1] if len(move_prob) > 1 else move_prob[0])
-            self.board[player.curr_loc[0], player.curr_loc[1]] = player.marker
+            self.player_map[k].reset(move_prob[k-1])
+
+            self.board[self.player_map[k].curr_loc[0], 
+                       self.player_map[k].curr_loc[1]] = self.player_map[k].marker
         
         # If we are a player and ask to reset, then with 50% prob opponent goes
         if player is not None and np.random.random() > .5:
             opponent = 1 if player == 2 else 2
             sample = self.sample(opponent)
             self.move(opponent, sample)
-            
-        return self.get_state(1)
+
+        return self.get_state(player), self.get_all_moves(1)
 
     def action_shape(self):
         return (self.max_positions,)
@@ -168,19 +168,14 @@ class Quoridor():
         tile_state = np.asarray([self.player_map[player].nmoves,
                       self.player_map[opponent].nmoves], dtype = np.float32)
         
-        tile_state /= float(self.player_map[player].MAX_MOVES)
+        #tile_state /= float(self.player_map[player].MAX_MOVES)
 
         return tile_state
-        
-    def get_state(self, player, normalize = True):
-        '''Get the state for the player'''
-        
-        board = np.copy(self.board.reshape(self.board.shape[0], self.board.shape[1], 1))
-        board = (board - np.iinfo(self.DTYPE).min) / (np.iinfo(self.DTYPE).max - np.iinfo(self.DTYPE).min)
-        
+    
+    def get_state(self, player):
+        board = np.copy(self.board)
         tile_state = self.get_tile_state(player)
-
-        return board, tile_state
+        return np.expand_dims(board, axis = -1), tile_state 
 
     def create_wall_array(self):
         count = 0
@@ -298,7 +293,13 @@ class Quoridor():
 
     def get_reward(self, player):
         if self.done:
-            return 2 * int(player == self.winner) - 1
+            opponent = 1 if player == 2 else 2
+            if player == self.winner:
+                return 1
+            elif opponent == self.winner:
+                return -1
+            else:
+                return 0
         return 0
     
     def update_walls(self):
@@ -376,63 +377,37 @@ class Quoridor():
         self.board[x, y] = player
    
     def move(self, player, move):
+        avail_moves = self.get_all_moves(player)
         if not self.done:
             move = move.astype(np.float32)
-            move += self.EPS
-            avail_moves = self.get_all_moves(player)
             
-            if not np.any(avail_moves == 1):
-                #print("You're trapped buddy")
-                return
+            if np.any(avail_moves == 1):
+                # Mask available moves as small neg value
+                move[np.where(avail_moves == 0)] = float('-inf')
+                idx = np.argmax(move)
 
-            # Mask available moves as 0, add epsilon, renormalize
-            move[np.where(avail_moves == 0)] = float('-inf')
-            idx = np.argmax(move)
-
-            if idx >= len(move) - 4:
-                idx = np.argmax(move[-4:])
-                verbose_print("Moving {}".format(self.MOVEDIRS[idx]))
-                self.move_pawn(player, idx)
-            else:
-                verbose_print("Place a wall at {}".format(self.wall_array[idx]))
-                self.__add_wall__(self.wall_array[idx])
-                self.valid_walls[idx] = 0
-                if self.player_map[player].nmoves != 0:
+                if idx >= len(move) - 4:
+                    idx = np.argmax(move[-4:])
+                    verbose_print("Moving {}".format(self.MOVEDIRS[idx]))
+                    self.move_pawn(player, idx)
+                else:
+                    verbose_print("Place a wall at {}".format(self.wall_array[idx]))
+                    self.__add_wall__(self.wall_array[idx])
+                    self.valid_walls[idx] = 0
                     self.update_walls()
-                self.player_map[player].dec_moves()
+                    self.player_map[player].dec_moves()
+                
+            self.nmoves += 1
+            if self.nmoves == self.max_moves:
+                self.done = True
+                self.winner = 0
             
             # Update winner
             if self.player_map[player].won():
                 self.done = True
                 self.winner = player
-                #print("Player {} wins!".format(self.winner))
-        else:
-            pass
-            #print("Game complete! Please reset")
-    
-    def move_opponent(self, opponent, direction = None, wall = None):
-        if not direction and not wall:
-            print("didn't do anything...")
-            return
-
-        sample = np.zeros(self.max_positions, dtype = np.uint8) 
-        if direction:
-            idx = self.MOVEDIRS.find(direction.lower())
-            idx += self.max_wall_positions
-        else:
-            idx = None
-            wall = Wall(wall[0], wall[1])
-            for i, w in enumerate(self.wall_array):
-                if wall == w:
-                    idx = i
-                    break
-            if idx == None:
-                print("What happened?")
-                return
-
-        sample[idx] = 1
-
-        self.move(opponent, sample)
+        
+        return avail_moves
 
     def sample(self, player):
         '''Only sample valid moves
@@ -530,13 +505,16 @@ class Quoridor():
 
         image.save(os.path.join(eval_dir, 'image_{}.png'.format(image_idx)), 'png')
 
-    def step(self, player, action):
+    def step(self, player, action, opponent_move = True):
         opponent = 1 if player == 2 else 2
 
-        self.move(player, action)
-        self.move(opponent, self.sample(opponent))
+        avail_moves = self.move(player, action)
+        if opponent_move:
+            self.move(opponent, self.sample(opponent))
+        
+        curr_valid_moves = self.get_all_moves(player)
 
-        return self.get_state(player), self.get_reward(player), self.done, 'nada'
+        return self.get_state(player), curr_valid_moves, self.get_reward(player), self.done, 'nada'
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

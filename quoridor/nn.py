@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 import numpy as np
-from keras.layers import Input, Conv2D, Flatten, Add, Dense, MaxPooling2D
+from keras.layers import Input, Conv2D, Flatten, Concatenate, Dense, MaxPooling2D
 from keras.layers.core import RepeatVector
 from keras.models import Model
 from keras.optimizers import RMSprop
@@ -11,7 +11,7 @@ from quoridor import Quoridor
 class NN():
     def __init__(self, board_shape, tile_shape, output_shape,
                  n_conv_layers = 3,
-                 base_conv_filters = 4,
+                 base_conv_filters = 16,
                  merge_dim = 256,
                  activation = 'relu'):
 
@@ -22,7 +22,7 @@ class NN():
 
 
         for i in range(1, n_conv_layers + 1):
-            filters = base_conv_filters ** i
+            filters = base_conv_filters * i
             output = Conv2D(filters = filters,
                             kernel_size = 3, 
                             strides = 1,
@@ -39,12 +39,11 @@ class NN():
         # Merge dim
         output = Dense(merge_dim, activation = activation)(output)
         
-        # Tile input
-        tile_output = RepeatVector(merge_dim // tile_shape[0])(tile_input)
-        tile_output = Flatten()(tile_output)
-        
+        # Tile input with a dense layer
+        tile_output = Dense(merge_dim, activation = activation)(tile_input)
+
         # Merge layer
-        output = Add()([output, tile_output])
+        output = Concatenate()([output, tile_output])
         
         # Two dense layers
         output = Dense(output_shape[0], activation = activation)(output)

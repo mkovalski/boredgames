@@ -36,9 +36,9 @@ def populate_rb(N):
         
         action = agent.act(state, env)
         
-        next_state, reward, done, _ = env.step(1, action)
+        next_state, avail_moves, reward, done, _ = env.step(1, action)
 
-        agent.memorize(state, action, reward, next_state, done)
+        agent.memorize(state, avail_moves, action, reward, next_state, done)
         state = next_state
     
     with open('rb.pkl', 'wb') as myFile:
