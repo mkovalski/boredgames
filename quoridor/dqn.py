@@ -16,7 +16,6 @@ from tqdm import tqdm
 import pickle
 
 EPISODES = 10000
-SAVEROOT = 'save'
 PLAYER = 1
 
 class DQNAgent:
@@ -41,7 +40,13 @@ class DQNAgent:
         self.epsilon_min = epsilon_min
         self.epsilon_decay = epsilon_decay
         self.model = NN(board_size, nmoves_size, action_size).get_model()
+        
         self.model_path = model_path
+        if os.path.isfile(self.model_path):
+            print("Loading latest weights!")
+            self.load(self.model_path)
+            self.model_path = os.path.dirname(os.path.abspath(self.model_path))
+            print("Saving in {}".format(self.model_path))
 
         self.train_loss = 0
         self.nsteps = 0
@@ -156,8 +161,9 @@ class DQNAgent:
     def load(self, name):
         self.model.load_weights(name)
 
-    def save(self):
-        self.model.save_weights(self.model_path)
+    def save(self, win_percent, step):
+        self.model.save_weights(
+            os.path.join(self.model_path, 'model_{}_{}.h5'.format(step, win_percent)))
 
 def populate_rb():
     env = Quoridor()
@@ -192,7 +198,9 @@ def populate_rb():
 
 
 def train(model_path, rb = None, offpolicy = False,
-          batch_size = 32, buffer_size = 20000):
+          batch_size = 32, buffer_size = 20000,
+          epsilon = 1.0):
+
     env = Quoridor()
     board_shape, tile_shape = env.state_shape()
     action_shape = env.action_shape()
@@ -200,7 +208,8 @@ def train(model_path, rb = None, offpolicy = False,
     agent = DQNAgent(board_shape, tile_shape, action_shape,
                      model_path = model_path,
                      batch_size = batch_size,
-                     buffer_size = buffer_size)
+                     buffer_size = buffer_size,
+                     epsilon = epsilon)
     done = False
 
     # Fill up the replay buffer
@@ -255,9 +264,7 @@ def train(model_path, rb = None, offpolicy = False,
 
         if e % 50 == 0:
             win_percentage = agent.evaluate(env)
-            if win_percentage > prev_win:
-                agent.save()
-                prev_win = win_percentage
+            agent.save(win_percentage, e)
 
 def train_off_policy(agent, batch_size):
     for i in range(1, 10000+1):
@@ -272,24 +279,26 @@ def evaluate(model_path):
     board_shape, tile_shape = env.state_shape()
     action_shape = env.action_shape()
 
-    agent = DQNAgent(board_shape, tile_shape, action_shape)
-    agent.load(model_path)
+    agent = DQNAgent(board_shape, tile_shape, action_shape,
+                     model_path = model_path)
     
     eval_dir = 'evaluate'
     os.makedirs(eval_dir)
 
     agent.reset()
-    state = env.reset(player = PLAYER, move_prob = 0.5)
+    env.reset(player = PLAYER, move_prob = 0.1)
 
     count = 0
 
     env.render(eval_dir, count)
 
     while not env.done:
+        state = env.get_state(PLAYER)
+        moves = env.get_all_moves(PLAYER)
 
-        state = env.get_state()
         action = agent.act(state, env, train = False)
-        print(np.argmax(action), np.amax(action))
+        tmp_action = action + ((1 - moves) * -1e9)
+        print(np.argmax(tmp_action), np.amax(tmp_action))
 
         env.move(player = PLAYER, move = action)
         count += 1
@@ -314,24 +323,26 @@ if __name__ == "__main__":
     parser.add_argument('--buffer_size', type = int, default = 10000)
     parser.add_argument('--offpolicy', action = 'store_true')
     parser.add_argument('--batch_size', default = 32, type = int)
+    parser.add_argument('--epsilon', default = 1.0, type = float)
 
     args = parser.parse_args()
 
-    full_path = os.path.join(SAVEROOT, args.model_path)
-    
     if args.rb is not None:
         assert(os.path.isfile(args.rb))
+    
+    # Load or start fresh
+    model_path = args.model_path
+    if not os.path.isfile(model_path):
+        assert(not os.path.isdir(model_path))
+        os.makedirs(model_path)
+    else:
+        print("Loading a model: {}!".format(model_path))
 
     if not args.evaluate:
-        if os.path.isdir(full_path):
-            print("{} already exists! Cannot save".format(full_path))
-            sys.exit(2)
-        os.makedirs(full_path)
-        full_path = os.path.join(full_path, 'model.h5') 
-        train(rb = args.rb, offpolicy = args.offpolicy, model_path = full_path,
+        train(rb = args.rb, offpolicy = args.offpolicy, model_path = model_path,
               batch_size = args.batch_size,
-              buffer_size = args.buffer_size)
+              buffer_size = args.buffer_size,
+              epsilon = args.epsilon)
     else:
-        model_path = os.path.join(args.model_path, 'model.h5')
         assert(os.path.isfile(model_path))
         evaluate(model_path)
