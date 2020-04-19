@@ -1,17 +1,19 @@
 #!/usr/bin/env python
 
 import numpy as np
-from copy import copy
 import sys
 import os
 from PIL import Image, ImageDraw
 import argparse
-import time
-import multiprocessing as mp
-from functools import lru_cache
-from numba import jit
 from lib import set_valid_walls
-from collections import deque
+
+from keras.layers import Input, Conv2D, Flatten, Concatenate, Dense, MaxPooling2D
+from keras.layers.core import RepeatVector
+from keras.losses import Huber
+from keras.models import Model
+from keras.optimizers import RMSprop
+from tensorflow.losses import huber_loss
+import keras.backend as K
 
 def verbose_print(string):
     if os.environ.get("VERBOSE") == 1:
@@ -123,10 +125,8 @@ class Quoridor():
         self.valid_walls = None
         self.per_move_valid_walls = None
         self.nmoves = 0
-
-        self.reset(1)
     
-    def reset(self, player = None, move_prob = None):
+    def reset(self, player, move_prob = None):
         self.done = False
         self.winner = None
         self.nmoves = 0
@@ -158,24 +158,22 @@ class Quoridor():
 
     def action_shape(self):
         return (self.max_positions,)
-
+    
     def state_shape(self):
         return (*self.board.shape, 1), (2,)
     
     def get_tile_state(self, player):
         opponent = 1 if player == 2 else 1
 
-        tile_state = np.asarray([self.player_map[player].nmoves,
-                      self.player_map[opponent].nmoves], dtype = np.float32)
+        tile_state = np.asarray([self.player_map[1].nmoves,
+                      self.player_map[2].nmoves, player], dtype = np.float32)
         
-        #tile_state /= float(self.player_map[player].MAX_MOVES)
-
         return tile_state
     
     def get_state(self, player):
         board = np.copy(self.board)
         tile_state = self.get_tile_state(player)
-        return np.expand_dims(board, axis = -1), tile_state 
+        return board.reshape(1, *board.shape, 1), tile_state.reshape(1, *tile_state.shape)
 
     def create_wall_array(self):
         count = 0
@@ -209,74 +207,40 @@ class Quoridor():
     def __str__(self):
         return str(self.board)
     
-    def can_complete(self, player):
-        self.complete_cache = {}
-
-        return self.dfs(self.player_map[player].curr_loc[0],
-                        self.player_map[player].curr_loc[1],
-                        player)
-    
-    def dfs(self, i, j, player):
-        if (i, j) in self.complete_cache:
-            return self.complete_cache[(i, j)]
-
-        if self.finished(player, i):
-            self.complete_cache[(i, j)] = True
-            return True
+    def get_valid_moves(self, player):
+        i = self.player_map[player].curr_loc[0]
+        j = self.player_map[player].curr_loc[1]
         
-        prev = self.board[i, j]
-        self.board[i, j] = self.EXPLORED
-        
-        for x, y in self.get_neighbors(i, j, board = self.board)[0]:
-            if self.dfs(x, y, player):
-                self.board[i, j] = prev
-                self.complete_cache[(i, j)] = True
-                return True
-        
-        self.board[i, j] = prev
-        self.complete_cache[(i, j)] = False
-        return False
-    
-    def get_neighbors(self, i, j, board, player = None):
-        # TODO: Player hops and trap setting
         # Left, up, right, down
-
         walls = [[i, j - 1], [i - 1, j], [i, j + 1], [i + 1, j]]
         locs = [[i, j - 2], [i - 2, j], [i, j + 2], [i + 2, j]]
         
         jump_locs = [[0, -2], [-2, 0], [0, 2], [2, 0]]
 
         ret = np.zeros(len(walls), dtype = np.uint8)
-        ret_locs = []
 
         for i in range(len(locs)):
             loc = locs[i]
             wall = walls[i]
             
             if 0 <= loc[0] < self.board.shape[0] and 0 <= loc[1] < self.board.shape[1] and \
-                self.board[wall[0], wall[1]] == self.NOWALL and board[loc[0], loc[1]] != self.EXPLORED:
+                self.board[wall[0], wall[1]] == self.NOWALL and self.board[loc[0], loc[1]] != self.EXPLORED:
                 
                 # If we are doing this for a move, check if we can hop a player
-                if player != None:
-                    opponent = 1 if player == 2 else 2
+                opponent = 1 if player == 2 else 2
 
-                    if self.board[tuple(loc)] == opponent:
-                        test_loc = np.copy(np.asarray(loc)) + jump_locs[i] 
-                        test_wall = np.copy(np.asarray(wall)) + jump_locs[i]
-                        
-                        if 0 <= test_loc[0] < self.board.shape[0] and 0 <= test_loc[1] < self.board.shape[1] and \
-                            self.board[test_wall[0], test_wall[1]] == self.NOWALL:
-                            ret[i] = 1
-                            ret_locs.append(loc)
-
-                    else:
+                if self.board[tuple(loc)] == opponent:
+                    test_loc = np.copy(np.asarray(loc)) + jump_locs[i] 
+                    test_wall = np.copy(np.asarray(wall)) + jump_locs[i]
+                    
+                    if 0 <= test_loc[0] < self.board.shape[0] and 0 <= test_loc[1] < self.board.shape[1] and \
+                        self.board[test_wall[0], test_wall[1]] == self.NOWALL:
                         ret[i] = 1
-                        ret_locs.append(loc)
+
                 else:        
                     ret[i] = 1
-                    ret_locs.append(loc)
 
-        return ret_locs, ret
+        return ret
 
     def finished(self, player, row):
         if player == self.PLAYER1:
@@ -316,32 +280,13 @@ class Quoridor():
         
         # Multiprocessing
         indices = np.where(self.valid_walls == 1)[0]
-        #per_move_valid_walls = copy(self.per_move_valid_walls)
 
-        #for idx in indices:
-        #    per_move_valid_walls[idx] = self.is_valid_wall(idx)
-        
-        #t1 = time.time()
         set_valid_walls(indices, self.per_move_valid_walls, self.board, 
                         self.expanded_wall_array, self.player_map[1].curr_loc,
                         self.player_map[2].curr_loc)
-        #print(time.time() - t1)
-        #assert(all(per_move_valid_walls == self.per_move_valid_walls))
 
         self.per_move_valid_walls *= self.valid_walls
         
-    def is_valid_wall(self, idx):
-        res = 1
-        tmpWall = self.wall_array[idx]
-        self.__add_wall__(tmpWall)
-        
-        res = 1
-        if not all(self.can_complete(i) for i in self.player_map.keys()):
-            res = 0
-        self.__remove_wall__(tmpWall)
-
-        return res
-
     def __add_wall__(self, wall):
         if self.board[wall.start] != self.NOWALL or self.board[wall.mid] != self.NOWALL or self.board[wall.end] != self.NOWALL:
             print("YUGE ERROR")
@@ -355,12 +300,6 @@ class Quoridor():
         self.board[wall.mid[0], wall.mid[1]] = self.NOWALL
         self.board[wall.end[0], wall.end[1]] = self.NOWALL
     
-    def get_valid_moves(self, player):
-        return self.get_neighbors(self.player_map[player].curr_loc[0],
-                                  self.player_map[player].curr_loc[1],
-                                  player = player,
-                                  board = self.board)[-1]
-
     def get_all_moves(self, player):
         if self.player_map[player].nmoves == 0:
             valid_walls = np.zeros_like(self.valid_walls)
@@ -516,6 +455,59 @@ class Quoridor():
 
         return self.get_state(player), curr_valid_moves, self.get_reward(player), self.done, 'nada'
 
+    def create_model(self, n_conv_layers = 3,
+                     base_conv_filters = 16,
+                     merge_dim = 256,
+                     activation = 'relu',
+                     policy = 'value'):
+
+        assert(policy.lower() in ['value', 'policy', 'both'])
+        
+        board_shape, tile_shape = self.state_shape()
+
+        board_input = Input(shape=board_shape,)
+        tile_input = Input(shape = tile_shape,)
+
+        inp = board_input
+
+        for i in range(1, n_conv_layers + 1):
+            filters = base_conv_filters * i
+            output = Conv2D(filters = filters,
+                            kernel_size = 3,
+                            strides = 1,
+                            padding = 'same',
+                            activation = activation)(inp)
+            output = MaxPooling2D()(output)
+
+            inp = output
+
+        sh = np.prod(output.shape.as_list()[1:])
+        output = Flatten()(output)
+
+        # Merge dim
+        output = Dense(merge_dim, activation = activation)(output)
+
+        # Tile input with a dense layer
+        tile_output = Dense(merge_dim, activation = activation)(tile_input)
+
+        # Merge layer
+        output = Concatenate()([output, tile_output])
+
+        # Two dense layers
+        output = Dense(output_shape[0], activation = activation)(output)
+
+        # Output
+        output = Dense(output_shape[0])(output)
+
+        model = Model(inputs = [board_input, tile_input],
+                      outputs = output)
+
+        model.compile(optimizer = RMSprop(learning_rate=0.0001),
+                      loss = huber_loss,
+                      metrics = ['accuracy'])
+
+        return model
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("-N", type = int, default = 9)
@@ -525,9 +517,8 @@ if __name__ == '__main__':
     game = Quoridor(N = args.N, )
 
     for i in range(100):
-        game.reset()
-        
-        player = 1
+        player = 2
+        game.reset(player)
 
         while not game.done:
             sample = game.sample(player)

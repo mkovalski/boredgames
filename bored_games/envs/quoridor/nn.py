@@ -34,7 +34,6 @@ class NN():
 
             inp = output
         
-        
         sh = np.prod(output.shape.as_list()[1:])
         output = Flatten()(output)
         
@@ -55,6 +54,7 @@ class NN():
         
         self.model = Model(inputs = [board_input, tile_input],
                            outputs = output)
+
         self.model.compile(optimizer = RMSprop(learning_rate=0.0001),
                            loss = huber_loss,
                            metrics = ['accuracy'])

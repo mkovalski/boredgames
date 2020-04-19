@@ -1,0 +1,1 @@
+from quoridor import Quoridor
