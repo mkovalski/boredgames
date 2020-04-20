@@ -83,7 +83,7 @@ class DQNAgent:
         
         next_target = self.model.predict(batch['next_state'])
 
-        next_target += ((1 - batch['next_valid_moves') * -1e9)
+        next_target += ((1 - batch['next_valid_moves']) * -1e9)
         next_target = np.amax(next_target, axis = 1)
         
         target = reward + ((1 - batch['done']) * (self.gamma * next_target))
@@ -164,7 +164,7 @@ class DQNAgent:
         if rb is not None:
             with open(rb, 'rb') as myFile:
                 replay_buffer = pickle.load(myFile)
-            self..memory = replay_buffer
+            self.memory = replay_buffer
             print("Loaded replay buffer!")
         else:
             

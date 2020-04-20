@@ -1,1 +1,1 @@
-from rb import ReplayBuffer
+from .rb import ReplayBuffer
