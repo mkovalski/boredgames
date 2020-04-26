@@ -8,12 +8,16 @@ import multiprocessing as mp
 import argparse
 from tqdm import tqdm
 import pickle
+import json
 from collections import deque
 from keras.models import clone_model
 from bored_games.utils import ReplayBuffer
 
 class DQNAgent:
     '''Base DQN agent. For more complicated DQN, use TQDN agent, Double DQN, etc.'''
+    
+    ALGO_NAME = 'DQN'
+
     def __init__(self, 
                  env, 
                  exp_dir,
@@ -38,7 +42,8 @@ class DQNAgent:
         self.decay_steps = decay_steps # how many training steps in which to decay
 
         self.replay_buffer = ReplayBuffer(buffer_size)
-
+        
+        # Set up directory
         if os.path.isdir(self.exp_dir):
             model_path = os.path.join(self.exp_dir, model_name)
             if os.path.isfile(model_path):
@@ -53,14 +58,18 @@ class DQNAgent:
         self.model = self.env.create_model()
         
         self.train_loss = 0
+        self.train_steps = 0
         self.nsteps = 0
-    
+
     def load(self, name):
         self.model.load_weights(name)
     
     def save(self, nsteps, win_percent):
         self.model.save_weights(
-            os.path.join(self.exp_dir, 'model_{}_{}.h5'.format(step, win_percent)))
+            os.path.join(self.exp_dir, 'model_{}_{}.h5'.format(nsteps, win_percent)))
+
+        # TODO: Add json config for latest results
+        # make this a parent method / abstract
 
     def reset(self):
         self.train_loss = 0
@@ -72,21 +81,31 @@ class DQNAgent:
     def act(self, state, env, train = True):
         '''Epsilon greedy policy'''
         if train and np.random.rand() <= self.epsilon:
-            return env.sample(PLAYER)
-
-        act_values = self.model.predict(state)
+            return env.sample(env.player)
+        
+        state = self.process_state(state)
+        
+        act_values = np.squeeze(self.model.predict(state), axis = 0)
         return act_values
     
+    def process_state(self, state):
+        if isinstance(state, tuple):
+            state = [np.expand_dims(x, axis = 0) for x in state]
+        else:
+            state = np.expand_dims(state, axis = 0)
+
+        return state
+            
     def update(self):
         # Stack em, train as batches
-        batch = self.get_batch(self.batch_size)
+        batch = self.replay_buffer.get_batch(self.batch_size)
         
         next_target = self.model.predict(batch['next_state'])
 
         next_target += ((1 - batch['next_valid_moves']) * -1e9)
         next_target = np.amax(next_target, axis = 1)
         
-        target = reward + ((1 - batch['done']) * (self.gamma * next_target))
+        target = batch['reward'] + ((1 - batch['done']) * (self.gamma * next_target))
 
         target_f = self.model.predict(batch['state'])
 
@@ -99,8 +118,10 @@ class DQNAgent:
 
         self.train_loss += hist.history['loss'][0]
         self.nsteps += 1
+        self.train_steps += 1
 
-        if self.epsilon > self.epsilon_min:
+        if self.train_steps % self.decay_steps == 0 and self.epsilon > self.epsilon_min:
+            self.train_steps = 0
             self.epsilon *= self.epsilon_decay
     
     def get_loss(self):
@@ -112,15 +133,15 @@ class DQNAgent:
         nwins = 0
 
         for i in range(eval_games):
-            state, _ = self.env.reset(player = PLAYER, move_prob = np.random.random())
+            state, _ = self.env.reset()
             done = False
 
             while not done:
-                action = self.act(state, env, train = False)
+                action = self.act(state, self.env, train = False)
 
-                state, _, reward, done, _ = self.env.step(PLAYER, action)
+                state, _, reward, done, _ = self.env.step(action)
                 if done:
-                    nwins += int(reward == PLAYER)
+                    nwins += int(reward == 1)
         
         win_percentage = nwins / eval_games 
         print(" - Win percentage: {}".format(win_percentage))
@@ -129,23 +150,19 @@ class DQNAgent:
     def run_sim(self, player_model, opponent_model = None):
         pass
 
-    def populate_rb(self, path):
-        assert(not os.path.isfile(path)), \
-            "Path {} for replay buffer already exists!".format(path)
-
+    def populate_rb(self):
         # Fill up the replay buffer
         done = True
         
         print("Populating replay buffer...")
-        for i in tqdm(range(self.memory.maxlen)):
+        for i in tqdm(range(self.replay_buffer.maxlen)):
             if done:
                 self.reset()
-                state, valid_moves = self.env.reset(player = PLAYER,
-                                                    move_prob = [np.random.random(), np.random.random()])
+                state, valid_moves = self.env.reset()
 
             action = self.act(state, self.env)
             
-            next_state, next_valid_moves, reward, done, _ = self.env.step(PLAYER, action)
+            next_state, next_valid_moves, reward, done, _ = self.env.step(action)
 
             self.memorize(dict(state = state, 
                                valid_moves = valid_moves, 
@@ -157,32 +174,34 @@ class DQNAgent:
             state = next_state
             valid_moves = next_valid_moves
         
-        with open(path, 'wb') as myFile:
-            pickle.dump(self.memory, myFile)
+        with open(os.path.join(self.exp_dir, 'rb.pkl'), 'wb') as myFile:
+            pickle.dump(self.replay_buffer, myFile)
 
-    def train(self, episodes = 1000, eval_eps = 50, ngames = 50, rb = None):
+    def train(self, 
+             episodes = 1000, 
+             eval_eps = 50, 
+             n_eval_games = 50, 
+             rb = None):
+
         if rb is not None:
             with open(rb, 'rb') as myFile:
                 replay_buffer = pickle.load(myFile)
-            self.memory = replay_buffer
+            self.replay_buffer = replay_buffer
             print("Loaded replay buffer!")
         else:
-            
-            print("Populating replay buffer...")
             self.populate_rb()
         
         prev_win = 0.0
 
         for e in range(1, episodes + 1):
             self.reset()
-            state, valid_moves = env.reset(player = PLAYER,
-                              move_prob = [np.random.random(), np.random.random()])
+            state, valid_moves = self.env.reset()
             done = False
 
             while not done:
-                action = self.act(state, env)
+                action = self.act(state, self.env)
                 
-                next_state, next_valid_moves, reward, done, _ = env.step(PLAYER, action)
+                next_state, next_valid_moves, reward, done, _ = self.env.step(action)
                 self.memorize(dict(state = state, 
                                    valid_moves = valid_moves, 
                                    action = action, 
@@ -196,17 +215,17 @@ class DQNAgent:
 
                 if done:
                     print("episode: {}/{}, e: {:.2}, nsteps: {}, loss: {}"
-                          .format(e, EPISODES, self.epsilon, self.nsteps, self.get_loss()))
+                          .format(e, episodes, self.epsilon, self.nsteps, self.get_loss()))
 
                 self.update()
             
-            # TODO: Parallel
+            # TODO: Separate process
             if e % eval_eps == 0:
-                win_percentage = self.evaluate(env, eval_games)
-                self.save(win_percentage, e)
+                win_percentage = self.evaluate(n_eval_games)
+                self.save(e, win_percentage)
 
 def evaluate(model_path):
-    env = Quoridor()
+    env = Quoridor(player = 1)
     board_shape, tile_shape = env.state_shape()
     action_shape = env.action_shape()
 
@@ -217,15 +236,15 @@ def evaluate(model_path):
     os.makedirs(eval_dir)
 
     agent.reset()
-    env.reset(player = PLAYER, move_prob = 0.1)
+    env.reset()
 
     count = 0
 
     env.render(eval_dir, count)
 
     while not env.done:
-        state = env.get_state(PLAYER)
-        moves = env.get_all_moves(PLAYER)
+        state = env.get_state()
+        moves = env.get_all_moves()
 
         action = agent.act(state, env, train = False)
         tmp_action = action + ((1 - moves) * -1e9)

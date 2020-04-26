@@ -5,14 +5,14 @@ import sys
 import os
 from PIL import Image, ImageDraw
 import argparse
-from lib import set_valid_walls
+from .lib import set_valid_walls
 
 from keras.layers import Input, Conv2D, Flatten, Concatenate, Dense, MaxPooling2D
 from keras.layers.core import RepeatVector
 from keras.losses import Huber
 from keras.models import Model
 from keras.optimizers import RMSprop
-from tensorflow.losses import huber_loss
+from tensorflow.keras.losses import Huber
 import keras.backend as K
 
 def verbose_print(string):
@@ -22,50 +22,38 @@ def verbose_print(string):
 class Player():
     '''Internal player class used by game'''
     MAX_MOVES = 10
+    FACING = [1, 0, 1, 0]
+    MOVEINC = [-2, -2, 2, 2]
 
-    def __init__(self, marker, init_loc, winning_row):
+    def __init__(self, marker, init_loc, winning_row, move_prob = None):
         assert(marker in [1, 2]), "Must be player 1 or 2"
+
         self.marker = marker
         self.opponent = 1 if marker == 2 else 2
         self._init_loc = init_loc
         self.curr_loc = init_loc
         self.nmoves = self.MAX_MOVES
         self.winning_row = winning_row
-        self.move_prob = None
+        self.move_prob = move_prob
 
-    def reset(self, move_prob = None):
+    def reset(self):
         self.curr_loc = np.copy(self._init_loc)
         self.nmoves = self.MAX_MOVES
-        self.move_prob = move_prob
-        if self.move_prob is not None and self.move_prob < 0.05:
-            self.move_prob = None
 
     def dec_moves(self):
         if self.nmoves > 0:
             self.nmoves -= 1
 
     def move(self, direction, board, depth = 0):
-        '''L U R D'''
-        assert(0<=direction<4)
+        '''Left Up Right Down'''
+
         if depth > 1:
             print("Maximum recursion depth!")
             sys.exit(2)
-
-        if direction == 0:
-            self.curr_loc[1] -= 2
-        elif direction == 1:
-            self.curr_loc[0] -= 2
-        elif direction == 2:
-            self.curr_loc[1] += 2
-        elif direction == 3:
-            self.curr_loc[0] += 2
-        else:
-            print("How did we get here?")
-            sys.exit(2)
+        
+        self.curr_loc[self.FACING[direction]] += self.MOVEINC[direction]
         
         if board[self.curr_loc[0], self.curr_loc[1]] == self.opponent:
-            #print("A JUMP MOVE!")
-
             self.move(direction, board, depth = depth + 1)
 
     def won(self):
@@ -88,8 +76,6 @@ class Wall():
         return "{}, {}".format(self.start, self.end)
 
 class Quoridor():
-    '''Let's play some quoridor'''
-    
     DTYPE = np.int8
 
     OPEN = 0
@@ -99,18 +85,46 @@ class Quoridor():
     EXPLORED = -2
     PLAYER1 = 1
     PLAYER2 = 2
+    PLAYER3 = 3
+    PLAYER4 = 4
 
     EPS = 1e-8
 
     MOVEDIRS = ['left', 'up', 'down', 'right']
 
-    def __init__(self, N = 9,
-                 players = 2,
-                 max_moves = 1000):
+    def __init__(self, player,
+                 N = 9,
+                 num_players = 2,
+                 max_moves = 1000,
+                 move_prob = None):
+        '''
+        Quoridor board game
+        
+        Args:
+            player (int): Player num, either 1 or 2
+            N (int): Size of the board
+            num_players (int): Number of players, for now support 2 but 4 will be coming soon!
+            max_moves (int): Maximum number of moves that can happen before termination
+            move_prob (list): When a random move is chosen, probability that the player
+                at that index - 1 chooses a move. For example, in a 2 player game and
+                move_prob = [0.5, 0.7], player 1 chooses to move (if possible) instead of play tile
+                at probability 0.5, player 2 does so at 0.7. Default does not change probability
+        '''
 
         assert(N % 2 == 1)
+        assert(num_players == 2), "Only two players for now, support for 4 coming soon!"
+        assert(max_moves > 0), "Need to play at least one move"
+        assert(1 <= player <= num_players), "Pick a player between 1 and {}".format(num_players)
+
+        self.player = player
         self.N = N
+        self.num_players = num_players
         self.max_moves = max_moves
+
+        if isinstance(move_prob, list):
+            assert(len(move_prob) == num_players), "Must be size of num players"
+        else:
+            move_prob = [move_prob] * num_players
 
         self.board = np.zeros((self.N*2-1, self.N*2-1), dtype = self.DTYPE)
         self.player_map = {}
@@ -118,21 +132,28 @@ class Quoridor():
         player1_loc = np.asarray([self.board.shape[0] - 1, self.N - 1])
         player2_loc = np.asarray([0, self.N - 1])
         
-        self.player_map[self.PLAYER1] = Player(self.PLAYER1, player1_loc, 0)
-        self.player_map[self.PLAYER2] = Player(self.PLAYER2, player2_loc, self.board.shape[0] - 1)
-        self.wall_array, self.expanded_wall_array = self.create_wall_array()
+        self.player_map[self.PLAYER1] = Player(self.PLAYER1, player1_loc, 0, move_prob = move_prob[0])
+        self.player_map[self.PLAYER2] = Player(self.PLAYER2, player2_loc, self.board.shape[0] - 1,
+                                               move_prob = move_prob[1])
+        self.wall_array, self.expanded_wall_array = self.__create_wall_array__()
 
         self.valid_walls = None
         self.per_move_valid_walls = None
         self.nmoves = 0
     
-    def reset(self, player, move_prob = None):
+    def reset(self, move_opponent = True):
+        '''
+        Reset the environment
+
+        Args:
+            player (None, int): Do we want to change the player for the environment
+            move_opponent (bool): Move the opponent with 50% probability during a reset
+
+        '''
+        
         self.done = False
         self.winner = None
         self.nmoves = 0
-
-        if not isinstance(move_prob, list):
-            move_prob = [move_prob, move_prob]
 
         # Clear board, setup wall spaces
         self.board[:] = self.OPEN
@@ -143,39 +164,58 @@ class Quoridor():
         self.per_move_valid_walls = np.ones(self.max_wall_positions, dtype = np.uint8)
         
         for k in self.player_map.keys():
-            self.player_map[k].reset(move_prob[k-1])
+            self.player_map[k].reset()
 
             self.board[self.player_map[k].curr_loc[0], 
                        self.player_map[k].curr_loc[1]] = self.player_map[k].marker
         
         # If we are a player and ask to reset, then with 50% prob opponent goes
-        if player is not None and np.random.random() > .5:
-            opponent = 1 if player == 2 else 2
-            sample = self.sample(opponent)
-            self.move(opponent, sample)
+        if move_opponent and np.random.random() > .5:
+            sample = self.sample(self.opponent)
+            self.move(self.opponent, sample)
 
-        return self.get_state(player), self.get_all_moves(1)
+        return self.get_state(), self.get_all_moves(self.player)
+    
+    # Attributes
+
+    def __str__(self):
+        return str(self.board)
+    
+    # List of properties
+
+    @property
+    def opponent(self):
+        if self.player == 1:
+            return 2
+        return 1
+    
+    @property
+    def max_wall_positions(self):
+        '''Number of positions a wall could go into'''
+        return 2 * ((self.N-1)**2)
+    
+    @property
+    def max_positions(self):
+        return self.max_wall_positions + 4
 
     def action_shape(self):
         return (self.max_positions,)
     
     def state_shape(self):
-        return (*self.board.shape, 1), (2,)
+        return (*self.board.shape, 1), (self.num_players,)
     
-    def get_tile_state(self, player):
-        opponent = 1 if player == 2 else 1
-
+    def get_tile_state(self):
         tile_state = np.asarray([self.player_map[1].nmoves,
-                      self.player_map[2].nmoves, player], dtype = np.float32)
+                      self.player_map[2].nmoves], dtype = np.float32)
         
         return tile_state
     
-    def get_state(self, player):
+    def get_state(self):
         board = np.copy(self.board)
-        tile_state = self.get_tile_state(player)
-        return board.reshape(1, *board.shape, 1), tile_state.reshape(1, *tile_state.shape)
+        tile_state = self.get_tile_state()
+        return board.reshape(*board.shape, 1), tile_state.reshape(*tile_state.shape)
 
-    def create_wall_array(self):
+    def __create_wall_array__(self):
         count = 0
         arr = [None] * self.max_wall_positions
 
@@ -195,19 +235,10 @@ class Quoridor():
         
         return arr, np.asarray([[x.start, x.mid, x.end] for x in arr])
     
-    @property
-    def max_wall_positions(self):
-        '''Number of positions a wall could go into'''
-        return 2 * ((self.N-1)**2)
-    
-    @property
-    def max_positions(self):
-        return self.max_wall_positions + 4
+    def get_valid_moves(self, player = None):
+        player = player if player else self.player
+        opponent = 1 if player == 2 else 2
 
-    def __str__(self):
-        return str(self.board)
-    
-    def get_valid_moves(self, player):
         i = self.player_map[player].curr_loc[0]
         j = self.player_map[player].curr_loc[1]
         
@@ -227,8 +258,6 @@ class Quoridor():
                 self.board[wall[0], wall[1]] == self.NOWALL and self.board[loc[0], loc[1]] != self.EXPLORED:
                 
                 # If we are doing this for a move, check if we can hop a player
-                opponent = 1 if player == 2 else 2
-
                 if self.board[tuple(loc)] == opponent:
                     test_loc = np.copy(np.asarray(loc)) + jump_locs[i] 
                     test_wall = np.copy(np.asarray(wall)) + jump_locs[i]
@@ -255,12 +284,11 @@ class Quoridor():
             print("HOW TF WE GET HERE HUH?")
             sys.exit(1)
 
-    def get_reward(self, player):
+    def get_reward(self):
         if self.done:
-            opponent = 1 if player == 2 else 2
-            if player == self.winner:
+            if self.player == self.winner:
                 return 1
-            elif opponent == self.winner:
+            elif self.opponent == self.winner:
                 return -1
             else:
                 return 0
@@ -278,9 +306,10 @@ class Quoridor():
                 if self.board[wall.start] == self.WALL or self.board[wall.mid] == self.WALL or self.board[wall.end] == self.WALL:
                     self.valid_walls[idx] = 0
         
-        # Multiprocessing
         indices = np.where(self.valid_walls == 1)[0]
-
+        
+        # Numba functions
+        # TODO: C++ rewrite
         set_valid_walls(indices, self.per_move_valid_walls, self.board, 
                         self.expanded_wall_array, self.player_map[1].curr_loc,
                         self.player_map[2].curr_loc)
@@ -323,6 +352,7 @@ class Quoridor():
             if np.any(avail_moves == 1):
                 # Mask available moves as small neg value
                 move[np.where(avail_moves == 0)] = float('-inf')
+
                 idx = np.argmax(move)
 
                 if idx >= len(move) - 4:
@@ -348,10 +378,13 @@ class Quoridor():
         
         return avail_moves
 
-    def sample(self, player):
+    def sample(self, player = None):
         '''Only sample valid moves
         Can choose to prefer moving over putting wall with some probability
         '''
+
+        player = player if player else self.player
+
         valid_moves = self.get_all_moves(player)
         
         sample = np.zeros(self.max_positions, dtype = np.uint8)
@@ -444,25 +477,21 @@ class Quoridor():
 
         image.save(os.path.join(eval_dir, 'image_{}.png'.format(image_idx)), 'png')
 
-    def step(self, player, action, opponent_move = True):
-        opponent = 1 if player == 2 else 2
-
-        avail_moves = self.move(player, action)
+    def step(self, action, opponent_move = True):
+        avail_moves = self.move(self.player, action)
         if opponent_move:
-            self.move(opponent, self.sample(opponent))
+            self.move(self.opponent, self.sample(self.opponent))
         
-        curr_valid_moves = self.get_all_moves(player)
+        curr_valid_moves = self.get_all_moves(self.player)
 
-        return self.get_state(player), curr_valid_moves, self.get_reward(player), self.done, 'nada'
+        return self.get_state(), curr_valid_moves, self.get_reward(), self.done, 'nada'
 
     def create_model(self, n_conv_layers = 3,
                      base_conv_filters = 16,
                      merge_dim = 256,
                      activation = 'relu',
-                     policy = 'value'):
+                     algo = 'dqn'):
 
-        assert(policy.lower() in ['value', 'policy', 'both'])
-        
         board_shape, tile_shape = self.state_shape()
 
         board_input = Input(shape=board_shape,)
@@ -494,16 +523,16 @@ class Quoridor():
         output = Concatenate()([output, tile_output])
 
         # Two dense layers
-        output = Dense(output_shape[0], activation = activation)(output)
+        output = Dense(self.max_positions, activation = activation)(output)
 
         # Output
-        output = Dense(output_shape[0])(output)
+        output = Dense(self.max_positions)(output)
 
         model = Model(inputs = [board_input, tile_input],
                       outputs = output)
 
         model.compile(optimizer = RMSprop(learning_rate=0.0001),
-                      loss = huber_loss,
+                      loss = Huber(),
                       metrics = ['accuracy'])
 
         return model
@@ -523,9 +552,6 @@ if __name__ == '__main__':
         while not game.done:
             sample = game.sample(player)
             game.move(player, sample)
-            # Ew
-            player += 1
-            if player >= 3:
-                player = 1
+            player = max((player + 1) % 3, 1)
             
         print(game.board)

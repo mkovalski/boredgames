@@ -13,7 +13,12 @@ class ReplayBuffer:
     def append(self, batch):
         self.memory.append(batch)
 
+    @property
+    def maxlen(self):
+        return self.memory.maxlen
+
     def get_batch(self, batch_size):
+
         minibatch = random.sample(self.memory, batch_size)
         batch_dict = {key: [] for key in minibatch[0].keys()}
 
@@ -22,9 +27,11 @@ class ReplayBuffer:
                 batch_dict[key].append(batch[key])
 
         for key in batch_dict.keys():
-            if isinstance(batch_dict[key][0], list):
-                for i in range(len(batch_dict[key])):
-                    batch_dict[key][i] = np.stack(batch_dict[key][i], axis = 0)
+            if isinstance(batch_dict[key][0], tuple):
+                batches = []
+                for i in range(len(batch_dict[key][0])):
+                    batches.append(np.stack([x[i] for x in batch_dict[key]]))
+                batch_dict[key] = batches
             else:
                 batch_dict[key] = np.stack(batch_dict[key], axis = 0)
         
