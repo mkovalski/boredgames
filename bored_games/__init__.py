@@ -1,2 +1,2 @@
 from .envs import Quoridor
-from .algos import DQNAgent
+from .algos import DQNAgent, TDQNAgent

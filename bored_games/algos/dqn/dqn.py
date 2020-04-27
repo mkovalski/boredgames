@@ -10,7 +10,6 @@ from tqdm import tqdm
 import pickle
 import json
 from collections import deque
-from keras.models import clone_model
 from bored_games.utils import ReplayBuffer
 
 class DQNAgent:
@@ -95,12 +94,15 @@ class DQNAgent:
             state = np.expand_dims(state, axis = 0)
 
         return state
-            
+    
+    def predict_next_target(self, batch):
+        return self.model.predict(batch)    
+
     def update(self):
         # Stack em, train as batches
         batch = self.replay_buffer.get_batch(self.batch_size)
         
-        next_target = self.model.predict(batch['next_state'])
+        next_target = self.predict_next_target(batch['next_state'])
 
         next_target += ((1 - batch['next_valid_moves']) * -1e9)
         next_target = np.amax(next_target, axis = 1)
@@ -215,7 +217,7 @@ class DQNAgent:
 
                 if done:
                     print("episode: {}/{}, e: {:.2}, nsteps: {}, loss: {}"
-                          .format(e, episodes, self.epsilon, self.nsteps, self.get_loss()))
+                          .format(e, episodes, self.epsilon, self.nsteps, self.get_loss()), flush = True)
 
                 self.update()
             

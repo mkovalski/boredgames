@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 
-from bored_games import Quoridor, DQNAgent
+from bored_games import Quoridor, TDQNAgent
 
 env = Quoridor(player = 1)
-agent = DQNAgent(env,
-                 exp_dir = 'test_dqn_quoridor',
-                 buffer_size = 100000,
+agent = TDQNAgent(env,
+                 exp_dir = 'quoridor_bs_32',
+                 buffer_size = 500000,
                  batch_size = 32,
                  decay_steps = 10000)
 
-agent.train(episodes = 10000, rb = 'test_dqn_quoridor/rb.pkl') 
+agent.train(episodes = 20000, rb = 'rbs/rb.pkl') 
