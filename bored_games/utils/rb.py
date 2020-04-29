@@ -4,8 +4,10 @@ import numpy as np
 from collections import deque
 
 class ReplayBuffer:
-    KEYS = set(['state', 'valid_moves', 'action', 'reward',
-               'next_state', 'next_valid_moves', 'done'])
+    KEYS = ['state', 'valid_moves', 'action', 'reward',
+               'next_state', 'next_valid_moves', 'done', 'idx']
+
+    priority = False
 
     def __init__(self, N, path = None):
         self.memory = deque(maxlen = N)
@@ -18,10 +20,16 @@ class ReplayBuffer:
         return self.memory.maxlen
 
     def get_batch(self, batch_size):
-
+        
         minibatch = random.sample(self.memory, batch_size)
-        batch_dict = {key: [] for key in minibatch[0].keys()}
+        minibatch = self.organize_batch(minibatch)
+        minibatch['idx'] = np.asarray([0] * batch_size)
 
+        return [minibatch[x] for x in self.KEYS]
+
+    def organize_batch(self, minibatch):
+        batch_dict = {key: [] for key in minibatch[0].keys()}
+        
         for batch in minibatch:
             for key in batch_dict.keys():
                 batch_dict[key].append(batch[key])
@@ -34,5 +42,5 @@ class ReplayBuffer:
                 batch_dict[key] = batches
             else:
                 batch_dict[key] = np.stack(batch_dict[key], axis = 0)
-        
+
         return batch_dict

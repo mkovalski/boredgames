@@ -10,7 +10,7 @@ from tqdm import tqdm
 import pickle
 import json
 from collections import deque
-from bored_games.utils import ReplayBuffer
+from bored_games.utils import ReplayBuffer, PrioritizedReplayBuffer
 
 class DQNAgent:
     '''Base DQN agent. For more complicated DQN, use TQDN agent, Double DQN, etc.'''
@@ -21,7 +21,8 @@ class DQNAgent:
                  env, 
                  exp_dir,
                  model_name = 'model.h5',
-                 buffer_size = 20000, 
+                 buffer_size = 20000,
+                 priority = False,
                  gamma = 0.99,
                  batch_size = 32,
                  epsilon = 1.0,
@@ -39,8 +40,11 @@ class DQNAgent:
         self.epsilon_min = epsilon_min  # min exploration rate
         self.epsilon_decay = epsilon_decay
         self.decay_steps = decay_steps # how many training steps in which to decay
-
-        self.replay_buffer = ReplayBuffer(buffer_size)
+        
+        if priority:
+            self.replay_buffer = PrioritizedReplayBuffer(buffer_size)
+        else:
+            self.replay_buffer = ReplayBuffer(buffer_size)
         
         # Set up directory
         if os.path.isdir(self.exp_dir):
@@ -74,8 +78,23 @@ class DQNAgent:
         self.train_loss = 0
         self.nsteps = 0
 
-    def memorize(self, batch):
-        self.replay_buffer.append(batch)
+    def memorize(self, minibatch):
+        kwargs = {}
+        
+        if self.replay_buffer.priority:
+            batch = self.replay_buffer.organize_batch([minibatch])
+
+            orig_target, next_target = self.get_target(batch['state'],
+                                                       batch['valid_moves'],
+                                                       batch['action'],
+                                                       batch['reward'],
+                                                       batch['next_state'],
+                                                       batch['next_valid_moves'],
+                                                       batch['done'])
+
+            kwargs['error'] = np.sum((orig_target - next_target)**2)
+
+        self.replay_buffer.append(minibatch, **kwargs)
 
     def act(self, state, env, train = True):
         '''Epsilon greedy policy'''
@@ -97,26 +116,41 @@ class DQNAgent:
     
     def predict_next_target(self, batch):
         return self.model.predict(batch)    
+    
+    def get_target(self, state, valid_moves, action, reward,
+                   next_state, next_valid_moves, done):
+        
+        next_target = self.predict_next_target(next_state)
+
+        next_target += ((1 - next_valid_moves) * -1e9)
+        next_target = np.amax(next_target, axis = 1)
+        
+        target = reward + ((1 - done) * (self.gamma * next_target))
+
+        orig_target = self.model.predict(state)
+        target_f = np.copy(orig_target)
+
+        x_indices = np.arange(0, done.shape[0])
+        y_indices = np.argmax(action + ((1 - valid_moves) * -1e-9), axis = 1)
+
+        target_f[x_indices, y_indices] = target
+
+        return orig_target, target_f
 
     def update(self):
         # Stack em, train as batches
-        batch = self.replay_buffer.get_batch(self.batch_size)
         
-        next_target = self.predict_next_target(batch['next_state'])
-
-        next_target += ((1 - batch['next_valid_moves']) * -1e9)
-        next_target = np.amax(next_target, axis = 1)
+        state, valid_moves, action, reward, \
+            next_state, next_valid_moves, done, idx = self.replay_buffer.get_batch(
+                self.batch_size)
+       
+        orig_target, target_f = self.get_target(state, valid_moves, action, reward,
+                                   next_state, next_valid_moves, done)
         
-        target = batch['reward'] + ((1 - batch['done']) * (self.gamma * next_target))
 
-        target_f = self.model.predict(batch['state'])
 
-        x_indices = np.arange(0, self.batch_size)
-        y_indices = np.argmax(batch['action'] + ((1 - batch['valid_moves']) * -1e-9), axis = 1)
-
-        target_f[x_indices, y_indices] = target
         
-        hist = self.model.fit(batch['state'], target_f, epochs=1, verbose=0)
+        hist = self.model.fit(state, target_f, epochs=1, verbose=0)
 
         self.train_loss += hist.history['loss'][0]
         self.nsteps += 1

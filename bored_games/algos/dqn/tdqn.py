@@ -17,7 +17,7 @@ from .dqn import DQNAgent
 class TDQNAgent(DQNAgent):
     '''TDQN agent. For more complicated DQN, use TQDN agent, Double DQN, etc.'''
    
-    def __init__(self, *args, n_target_updates = 1e4, **kwargs):
+    def __init__(self, *args, n_target_updates = 1e6, **kwargs):
         super().__init__(*args, **kwargs)
         self.target_model = clone_model(self.model)
         self.n_target_updates = n_target_updates
@@ -28,6 +28,8 @@ class TDQNAgent(DQNAgent):
     
     def update(self):
         super().update()
+        
+        self.n_target_steps += 1
 
         if self.n_target_steps % self.n_target_updates == 0:
             print("Updating target model!")
