@@ -500,7 +500,7 @@ class Quoridor():
         inp = board_input
 
         for i in range(1, n_conv_layers + 1):
-            filters = base_conv_filters * i
+            filters = base_conv_filters * (n_conv_layers - i + 1)
             output = Conv2D(filters = filters,
                             kernel_size = 3,
                             strides = 1,
@@ -526,7 +526,7 @@ class Quoridor():
         output = Dense(self.max_positions, activation = activation)(output)
 
         # Output
-        output = Dense(self.max_positions)(output)
+        output = Dense(self.max_positions, activation = 'linear')(output)
 
         model = Model(inputs = [board_input, tile_input],
                       outputs = output)
