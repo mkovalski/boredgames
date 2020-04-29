@@ -33,5 +33,6 @@ class TDQNAgent(DQNAgent):
 
         if self.n_target_steps % self.n_target_updates == 0:
             print("Updating target model!")
-            self.target_model = clone_model(self.model)
+            w = self.model.get_weights()
+            self.target_model.set_weights(w)
             self.n_target_steps = 0
