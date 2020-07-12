@@ -8,10 +8,6 @@ class Env:
         raise NotImplemented
 
     @abstactmethod
-    def build_network(self):
-        raise NotImplemented
-
-    @abstactmethod
     def step(self):
         raise NotImplemented
 
