@@ -5,15 +5,8 @@ import sys
 import os
 from PIL import Image, ImageDraw
 import argparse
-from .lib import set_valid_walls
-
-from keras.layers import Input, Conv2D, Flatten, Concatenate, Dense, MaxPooling2D
-from keras.layers.core import RepeatVector
-from keras.losses import Huber
-from keras.models import Model
-from keras.optimizers import RMSprop
-from tensorflow.keras.losses import Huber
-import keras.backend as K
+from lib import set_valid_walls
+from termcolor import colored, cprint
 
 def verbose_print(string):
     if os.environ.get("VERBOSE") == 1:
@@ -92,19 +85,29 @@ class Quoridor():
 
     MOVEDIRS = ['left', 'up', 'down', 'right']
 
-    def __init__(self, player,
+    # For ascii rendering
+    COLORS = {PLAYER1: 'blue',
+              PLAYER2: 'magenta',
+              PLAYER3: 'cyan',
+              PLAYER4: 'white',
+              OPEN: 'grey',
+              WALL: 'red',
+              NOWALL: 'green'}
+    
+
+    def __init__(self, player = 1,
                  N = 9,
                  num_players = 2,
                  max_moves = 1000,
-                 move_prob = None):
+                 move_prob = [0.5, 0.5]):
         '''
         Quoridor board game
         
         Args:
             player (int): Player num, either 1 or 2
-            N (int): Size of the board
-            num_players (int): Number of players, for now support 2 but 4 will be coming soon!
-            max_moves (int): Maximum number of moves that can happen before termination
+            N (int): Size of the board, must be an odd number
+            num_players (int): Number of players, currently support for 2
+            max_moves (int): Maximum number of moves that can happen before considered a draw
             move_prob (list): When a random move is chosen, probability that the player
                 at that index - 1 chooses a move. For example, in a 2 player game and
                 move_prob = [0.5, 0.7], player 1 chooses to move (if possible) instead of play tile
@@ -116,15 +119,13 @@ class Quoridor():
         assert(max_moves > 0), "Need to play at least one move"
         assert(1 <= player <= num_players), "Pick a player between 1 and {}".format(num_players)
 
+        assert(len(move_prob) == num_players), \
+            "move_prob must be of length the number of players"
+
         self.player = player
         self.N = N
         self.num_players = num_players
         self.max_moves = max_moves
-
-        if isinstance(move_prob, list):
-            assert(len(move_prob) == num_players), "Must be size of num players"
-        else:
-            move_prob = [move_prob] * num_players
 
         self.board = np.zeros((self.N*2-1, self.N*2-1), dtype = self.DTYPE)
         self.player_map = {}
@@ -146,8 +147,8 @@ class Quoridor():
         Reset the environment
 
         Args:
-            player (None, int): Do we want to change the player for the environment
-            move_opponent (bool): Move the opponent with 50% probability during a reset
+            move_opponent (bool): During a reset, if set to True, makes the opponent
+                move first with probability of 50%
 
         '''
         
@@ -160,12 +161,13 @@ class Quoridor():
         self.board[1::2, :] = self.NOWALL
         self.board[:, 1::2] = self.NOWALL
         
+        # Reset walls
         self.valid_walls = np.ones(self.max_wall_positions, dtype = np.uint8)
         self.per_move_valid_walls = np.ones(self.max_wall_positions, dtype = np.uint8)
         
+        # Reset players, mark board with players
         for k in self.player_map.keys():
             self.player_map[k].reset()
-
             self.board[self.player_map[k].curr_loc[0], 
                        self.player_map[k].curr_loc[1]] = self.player_map[k].marker
         
@@ -177,7 +179,6 @@ class Quoridor():
         return self.get_state(), self.get_all_moves(self.player)
     
     # Attributes
-
     def __str__(self):
         return str(self.board)
     
@@ -185,9 +186,7 @@ class Quoridor():
 
     @property
     def opponent(self):
-        if self.player == 1:
-            return 2
-        return 1
+        return (self.player % self.num_players) + 1
     
     @property
     def max_wall_positions(self):
@@ -419,6 +418,26 @@ class Quoridor():
 
         return sample
 
+    def render_ascii(self):
+        for i in range(self.board.shape[0]):
+            line = ''
+            if i % 2 == 0:
+                line += ' '
+            for j in range(self.board.shape[1]):
+                color = self.COLORS[self.board[i,j]]
+                if self.board[i,j] in set([self.WALL, self.NOWALL]):
+                    if i % 2 == 0:
+                        board_char = ' | '
+                    else:
+                        board_char = '---'
+                        if j % 2 == 1:
+                            board_char = '-'
+                            color = 'grey'
+                    line += colored(board_char, color)
+                else:
+                    line += colored(self.board[i,j], color)
+            print(line)
+
     def render(self, eval_dir, image_idx):
         image = Image.new(mode='L', size=(450, 450), color=255)
         draw = ImageDraw.Draw(image)
@@ -486,72 +505,20 @@ class Quoridor():
 
         return self.get_state(), curr_valid_moves, self.get_reward(), self.done, 'nada'
 
-    def create_model(self, n_conv_layers = 3,
-                     base_conv_filters = 16,
-                     merge_dim = 256,
-                     activation = 'relu',
-                     algo = 'dqn'):
-
-        board_shape, tile_shape = self.state_shape()
-
-        board_input = Input(shape=board_shape,)
-        tile_input = Input(shape = tile_shape,)
-
-        inp = board_input
-
-        for i in range(1, n_conv_layers + 1):
-            filters = base_conv_filters * (n_conv_layers - i + 1)
-            output = Conv2D(filters = filters,
-                            kernel_size = 3,
-                            strides = 1,
-                            padding = 'same',
-                            activation = activation)(inp)
-            output = MaxPooling2D()(output)
-
-            inp = output
-
-        sh = np.prod(output.shape.as_list()[1:])
-        output = Flatten()(output)
-
-        # Merge dim
-        output = Dense(merge_dim, activation = activation)(output)
-
-        # Tile input with a dense layer
-        tile_output = Dense(merge_dim, activation = activation)(tile_input)
-
-        # Merge layer
-        output = Concatenate()([output, tile_output])
-
-        # Two dense layers
-        output = Dense(self.max_positions, activation = activation)(output)
-
-        # Output
-        output = Dense(self.max_positions, activation = 'linear')(output)
-
-        model = Model(inputs = [board_input, tile_input],
-                      outputs = output)
-
-        model.compile(optimizer = RMSprop(learning_rate=0.0001),
-                      loss = Huber(),
-                      metrics = ['accuracy'])
-
-        return model
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("-N", type = int, default = 9)
-    parser.add_argument('--move_prob', type = float, default = None)
+    parser.add_argument("-N", type = int, default = 9,
+        help = "Shape of the board")
     args = parser.parse_args()
 
     game = Quoridor(N = args.N, )
+    
+    player = 2
+    game.reset(player)
 
-    for i in range(100):
-        player = 2
-        game.reset(player)
-
-        while not game.done:
-            sample = game.sample(player)
-            game.move(player, sample)
-            player = max((player + 1) % 3, 1)
-            
-        print(game.board)
+    while not game.done:
+        sample = game.sample(player)
+        game.move(player, sample)
+        player = max((player + 1) % 3, 1)
+        
+    game.render_ascii()
