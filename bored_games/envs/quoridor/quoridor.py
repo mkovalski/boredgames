@@ -5,7 +5,7 @@ import sys
 import os
 from PIL import Image, ImageDraw
 import argparse
-from lib import set_valid_walls
+from bored_games.envs.quoridor.lib import set_valid_walls
 from termcolor import colored, cprint
 
 def verbose_print(string):
@@ -94,7 +94,6 @@ class Quoridor():
               WALL: 'red',
               NOWALL: 'green'}
     
-
     def __init__(self, player = 1,
                  N = 9,
                  num_players = 2,
@@ -367,6 +366,7 @@ class Quoridor():
                 
             self.nmoves += 1
             if self.nmoves == self.max_moves:
+                print("Hit max moves limit!")
                 self.done = True
                 self.winner = 0
             
@@ -419,24 +419,27 @@ class Quoridor():
         return sample
 
     def render_ascii(self):
+        lines = ''
+
         for i in range(self.board.shape[0]):
             line = ''
             if i % 2 == 0:
-                line += ' '
+                line += '  '
             for j in range(self.board.shape[1]):
                 color = self.COLORS[self.board[i,j]]
                 if self.board[i,j] in set([self.WALL, self.NOWALL]):
                     if i % 2 == 0:
-                        board_char = ' | '
+                        board_char = '  |  '
                     else:
-                        board_char = '---'
+                        board_char = '-----'
                         if j % 2 == 1:
                             board_char = '-'
                             color = 'grey'
                     line += colored(board_char, color)
                 else:
                     line += colored(self.board[i,j], color)
-            print(line)
+
+            print(line + '\n')
 
     def render(self, eval_dir, image_idx):
         image = Image.new(mode='L', size=(450, 450), color=255)
@@ -511,14 +514,15 @@ if __name__ == '__main__':
         help = "Shape of the board")
     args = parser.parse_args()
 
-    game = Quoridor(N = args.N, )
+    player = 1
+    game = Quoridor(player = player, N = args.N, )
     
-    player = 2
-    game.reset(player)
+    # Player 1 goes first
+    game.reset(move_opponent = False)
 
     while not game.done:
         sample = game.sample(player)
         game.move(player, sample)
-        player = max((player + 1) % 3, 1)
-        
+        player = (player % 2) + 1
+       
     game.render_ascii()
