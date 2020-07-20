@@ -18,7 +18,7 @@ class Player():
     FACING = [1, 0, 1, 0]
     MOVEINC = [-2, -2, 2, 2]
 
-    def __init__(self, marker, init_loc, winning_row, move_prob = None):
+    def __init__(self, marker, init_loc, winning_row):
         assert(marker in [1, 2]), "Must be player 1 or 2"
 
         self.marker = marker
@@ -27,7 +27,6 @@ class Player():
         self.curr_loc = init_loc
         self.nmoves = self.MAX_MOVES
         self.winning_row = winning_row
-        self.move_prob = move_prob
 
     def reset(self):
         self.curr_loc = np.copy(self._init_loc)
@@ -97,8 +96,7 @@ class Quoridor():
     def __init__(self, player = 1,
                  N = 9,
                  num_players = 2,
-                 max_moves = 1000,
-                 move_prob = [0.5, 0.5]):
+                 max_moves = 1000):
         '''
         Quoridor board game
         
@@ -107,19 +105,12 @@ class Quoridor():
             N (int): Size of the board, must be an odd number
             num_players (int): Number of players, currently support for 2
             max_moves (int): Maximum number of moves that can happen before considered a draw
-            move_prob (list): When a random move is chosen, probability that the player
-                at that index - 1 chooses a move. For example, in a 2 player game and
-                move_prob = [0.5, 0.7], player 1 chooses to move (if possible) instead of play tile
-                at probability 0.5, player 2 does so at 0.7. Default does not change probability
         '''
 
         assert(N % 2 == 1)
         assert(num_players == 2), "Only two players for now, support for 4 coming soon!"
         assert(max_moves > 0), "Need to play at least one move"
         assert(1 <= player <= num_players), "Pick a player between 1 and {}".format(num_players)
-
-        assert(len(move_prob) == num_players), \
-            "move_prob must be of length the number of players"
 
         self.player = player
         self.N = N
@@ -132,16 +123,15 @@ class Quoridor():
         player1_loc = np.asarray([self.board.shape[0] - 1, self.N - 1])
         player2_loc = np.asarray([0, self.N - 1])
         
-        self.player_map[self.PLAYER1] = Player(self.PLAYER1, player1_loc, 0, move_prob = move_prob[0])
-        self.player_map[self.PLAYER2] = Player(self.PLAYER2, player2_loc, self.board.shape[0] - 1,
-                                               move_prob = move_prob[1])
+        self.player_map[self.PLAYER1] = Player(self.PLAYER1, player1_loc, 0)
+        self.player_map[self.PLAYER2] = Player(self.PLAYER2, player2_loc, self.board.shape[0] - 1)
         self.wall_array, self.expanded_wall_array = self.__create_wall_array__()
 
         self.valid_walls = None
         self.per_move_valid_walls = None
         self.nmoves = 0
     
-    def reset(self, move_opponent = True):
+    def reset(self, move_opponent = True, move_priority = None):
         '''
         Reset the environment
 
@@ -154,6 +144,7 @@ class Quoridor():
         self.done = False
         self.winner = None
         self.nmoves = 0
+        self.move_priority = move_priority
 
         # Clear board, setup wall spaces
         self.board[:] = self.OPEN
@@ -175,7 +166,7 @@ class Quoridor():
             sample = self.sample(self.opponent)
             self.move(self.opponent, sample)
 
-        return self.get_state(), self.get_all_moves(self.player)
+        return self.get_state(), self.get_valid_actions(self.player)
     
     # Attributes
     def __str__(self):
@@ -200,7 +191,7 @@ class Quoridor():
         return (self.max_positions,)
     
     def state_shape(self):
-        return (*self.board.shape, 1), (self.num_players,)
+        return (1, *self.board.shape), (self.num_players,)
     
     def get_tile_state(self):
         tile_state = np.asarray([self.player_map[1].nmoves,
@@ -211,7 +202,8 @@ class Quoridor():
     def get_state(self):
         board = np.copy(self.board)
         tile_state = self.get_tile_state()
-        return board.reshape(*board.shape, 1), tile_state.reshape(*tile_state.shape)
+        return board.reshape(1, *board.shape).astype(np.float32), \
+            tile_state.reshape(*tile_state.shape).astype(np.float32)
 
     def __create_wall_array__(self):
         count = 0
@@ -327,7 +319,7 @@ class Quoridor():
         self.board[wall.mid[0], wall.mid[1]] = self.NOWALL
         self.board[wall.end[0], wall.end[1]] = self.NOWALL
     
-    def get_all_moves(self, player):
+    def get_valid_actions(self, player):
         if self.player_map[player].nmoves == 0:
             valid_walls = np.zeros_like(self.valid_walls)
         else:
@@ -343,7 +335,7 @@ class Quoridor():
         self.board[x, y] = player
    
     def move(self, player, move):
-        avail_moves = self.get_all_moves(player)
+        avail_moves = self.get_valid_actions(player)
         if not self.done:
             move = move.astype(np.float32)
             
@@ -366,7 +358,6 @@ class Quoridor():
                 
             self.nmoves += 1
             if self.nmoves == self.max_moves:
-                print("Hit max moves limit!")
                 self.done = True
                 self.winner = 0
             
@@ -384,7 +375,7 @@ class Quoridor():
 
         player = player if player else self.player
 
-        valid_moves = self.get_all_moves(player)
+        valid_moves = self.get_valid_actions(player)
         
         sample = np.zeros(self.max_positions, dtype = np.uint8)
         
@@ -393,26 +384,8 @@ class Quoridor():
         if len(all_indices) == 0:
             return sample
         
-        idx = None
-
-        move_prob = self.player_map[player].move_prob
-
-        if move_prob is not None:
-            move_indices = all_indices[np.where(all_indices >= self.max_wall_positions)]
-            wall_indices = all_indices[np.where(all_indices < self.max_wall_positions)]
-
-            if np.random.random() < move_prob:
-                if len(move_indices) != 0:
-                    idx = np.random.choice(move_indices)
-                else:
-                    idx = np.random.choice(wall_indices)
-            else:
-                if len(wall_indices) != 0:
-                    idx = np.random.choice(wall_indices)
-                else:
-                    idx = np.random.choice(move_indices)
-        else:
-            idx = np.random.choice(all_indices)
+        # Choice out of all available indices
+        idx = np.random.choice(all_indices)
 
         sample[idx] = 1
 
@@ -504,7 +477,7 @@ class Quoridor():
         if opponent_move:
             self.move(self.opponent, self.sample(self.opponent))
         
-        curr_valid_moves = self.get_all_moves(self.player)
+        curr_valid_moves = self.get_valid_actions(self.player)
 
         return self.get_state(), curr_valid_moves, self.get_reward(), self.done, 'nada'
 
