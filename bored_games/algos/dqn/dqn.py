@@ -25,6 +25,7 @@ class DQNAgent:
     def __init__(self, 
                  env,
                  model,
+                 target_model,
                  exp_dir,
                  resume = False,
                  gamma = 0.999,
@@ -37,7 +38,7 @@ class DQNAgent:
                 
         self.env = env
         self.model = model
-        self.target_model = copy.deepcopy(self.model)
+        self.target_model = target_model
         self.exp_dir = exp_dir
 
         self.model_path = None
@@ -59,6 +60,9 @@ class DQNAgent:
         self.device = 'cpu'
         if torch.cuda.is_available():
             self.device = 'cuda'
+        
+        self.model = self.model.to(self.device)
+        self.target_model = self.target_model.to(self.device)
 
         self.train_loss = 0
         self.train_steps = 0
@@ -94,7 +98,7 @@ class DQNAgent:
         state = [np.expand_dims(x, axis = 0) for x in state]
         state = [torch.from_numpy(x).to(self.device) for x in state]
         with torch.no_grad():
-            act_values = self.model(*state)
+            act_values = self.model(*state).cpu()
 
         return act_values.numpy().squeeze(axis = 0)
 
@@ -105,7 +109,7 @@ class DQNAgent:
             # Get target value
             next_state = [torch.from_numpy(x).to(self.device) for x in next_state]
             
-            next_target = self.target_model(*next_state).numpy()
+            next_target = self.target_model(*next_state).cpu().numpy()
 
             next_target += ((1 - next_valid_actions) * -1e9)
             next_target = np.amax(next_target, axis = 1)
@@ -119,13 +123,14 @@ class DQNAgent:
 
             state = [torch.from_numpy(x).to(self.device) for x in state]
             pred = self.model(*state).gather(
-                1, torch.from_numpy(indices.reshape(-1, 1)))
+                1, torch.from_numpy(indices.reshape(-1, 1)).to(self.device))
+
 
             # Update model
             loss = F.smooth_l1_loss(pred,
                                     torch.from_numpy(target).float().to(self.device))
 
-        return loss.item()
+        return loss.cpu().item()
     
     def optimize(self, state, valid_actions, action, reward,
                  next_state, next_valid_actions, done):
@@ -134,7 +139,7 @@ class DQNAgent:
         next_state = [torch.from_numpy(x).to(self.device) for x in next_state]
         
         with torch.no_grad():
-            next_target = self.target_model(*next_state).numpy()
+            next_target = self.target_model(*next_state).cpu().numpy()
 
         next_target += ((1 - next_valid_actions) * -1e9)
         next_target = np.amax(next_target, axis = 1)
@@ -147,22 +152,26 @@ class DQNAgent:
 
         state = [torch.from_numpy(x).to(self.device) for x in state]
         pred = self.model(*state).gather(
-            1, torch.from_numpy(indices.reshape(-1, 1)))
+            1, torch.from_numpy(indices.reshape(-1, 1)).to(self.device))
     
         
         # Update model
-        loss = F.smooth_l1_loss(pred,
+        loss = F.smooth_l1_loss(pred.float(),
                                 torch.from_numpy(target).float().to(self.device),
                                 reduction = 'none')
-
+        
         # Optimize the model
         self.optimizer.zero_grad()
         loss.mean().backward()
         for param in self.model.parameters():
             param.grad.data.clamp_(-1, 1)
         self.optimizer.step()
+
+        if loss.mean().cpu().item() > 1000.0:
+            import pdb
+            pdb.set_trace()
         
-        return loss.detach().numpy(), loss.mean().item()
+        return loss.detach().cpu().numpy(), loss.mean().cpu().item()
 
     def get_loss(self):
         if self.nsteps != 0:
