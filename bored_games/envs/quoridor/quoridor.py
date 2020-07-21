@@ -80,8 +80,6 @@ class Quoridor():
     PLAYER3 = 3
     PLAYER4 = 4
 
-    EPS = 1e-8
-
     MOVEDIRS = ['left', 'up', 'down', 'right']
 
     # For ascii rendering
@@ -96,7 +94,8 @@ class Quoridor():
     def __init__(self, player = 1,
                  N = 9,
                  num_players = 2,
-                 max_moves = 1000):
+                 max_moves = 1000,
+                 random_move_prob = False):
         '''
         Quoridor board game
         
@@ -116,7 +115,10 @@ class Quoridor():
         self.N = N
         self.num_players = num_players
         self.max_moves = max_moves
+        self.random_move_prob = random_move_prob
+        self.move_prob = None
 
+        
         self.board = np.zeros((self.N*2-1, self.N*2-1), dtype = self.DTYPE)
         self.player_map = {}
         
@@ -161,6 +163,9 @@ class Quoridor():
             self.board[self.player_map[k].curr_loc[0], 
                        self.player_map[k].curr_loc[1]] = self.player_map[k].marker
         
+        if self.random_move_prob:
+            self.move_prob = np.random.random(self.num_players)
+
         # If we are a player and ask to reset, then with 50% prob opponent goes
         if move_opponent and np.random.random() > .5:
             sample = self.sample(self.opponent)
@@ -197,10 +202,18 @@ class Quoridor():
         tile_state = np.asarray([self.player_map[1].nmoves,
                       self.player_map[2].nmoves], dtype = np.float32)
         
+        # Normalize -1 to 1
+        tile_state /= self.player_map[1].MAX_MOVES
+        tile_state *= 2
+        tile_state -= 1
+        
         return tile_state
     
     def get_state(self):
         board = np.copy(self.board)
+        # Normalize -1 to 1
+        board = 2 * ((board - self.NOWALL) / (self.WALL - self.NOWALL)) - 1
+
         tile_state = self.get_tile_state()
         return board.reshape(1, *board.shape).astype(np.float32), \
             tile_state.reshape(*tile_state.shape).astype(np.float32)
@@ -319,13 +332,16 @@ class Quoridor():
         self.board[wall.mid[0], wall.mid[1]] = self.NOWALL
         self.board[wall.end[0], wall.end[1]] = self.NOWALL
     
-    def get_valid_actions(self, player):
+    def get_valid_walls(self, player):
         if self.player_map[player].nmoves == 0:
             valid_walls = np.zeros_like(self.valid_walls)
         else:
             valid_walls = self.per_move_valid_walls
 
-        return np.append(valid_walls, self.get_valid_moves(player))
+        return valid_walls
+        
+    def get_valid_actions(self, player):
+        return np.append(self.get_valid_walls(player), self.get_valid_moves(player))
 
     def move_pawn(self, player, move):
         x, y = self.player_map[player].curr_loc
@@ -375,7 +391,10 @@ class Quoridor():
 
         player = player if player else self.player
 
-        valid_moves = self.get_valid_actions(player)
+        valid_walls = self.get_valid_walls(player)
+        valid_actions = self.get_valid_moves(player)
+        
+        valid_moves = np.concatenate([valid_walls, valid_actions])
         
         sample = np.zeros(self.max_positions, dtype = np.uint8)
         
@@ -384,8 +403,25 @@ class Quoridor():
         if len(all_indices) == 0:
             return sample
         
-        # Choice out of all available indices
-        idx = np.random.choice(all_indices)
+        idx = None
+        if self.random_move_prob:
+            wall_indices = np.where(valid_walls == 1)[0]
+            move_indices = np.where(valid_actions == 1)[0]
+
+            # Move instead of selecting a wall
+            if np.random.random() < self.move_prob[player-1]:
+                if len(move_indices) != 0:
+                    idx = np.random.choice(move_indices) + len(valid_walls)
+                else:
+                    idx = np.random.choice(wall_indices)
+            else:
+                if len(wall_indices) != 0:
+                    idx = np.random.choice(wall_indices)
+                else:
+                    idx = np.random.choice(move_indices) + len(valid_walls)
+        else:
+            # Choice out of all available indices
+            idx = np.random.choice(all_indices)
 
         sample[idx] = 1
 
@@ -473,7 +509,7 @@ class Quoridor():
         image.save(os.path.join(eval_dir, 'image_{}.png'.format(image_idx)), 'png')
 
     def step(self, action, opponent_move = True):
-        avail_moves = self.move(self.player, action)
+        self.move(self.player, action)
         if opponent_move:
             self.move(self.opponent, self.sample(self.opponent))
         
@@ -496,6 +532,7 @@ if __name__ == '__main__':
     while not game.done:
         sample = game.sample(player)
         game.move(player, sample)
+        game.render_ascii()
         player = (player % 2) + 1
        
     game.render_ascii()

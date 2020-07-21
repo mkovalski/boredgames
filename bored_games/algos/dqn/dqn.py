@@ -27,10 +27,9 @@ class DQNAgent:
                  model,
                  exp_dir,
                  resume = False,
-                 buffer_size = 20000,
-                 gamma = 0.99,
+                 gamma = 0.999,
                  batch_size = 64,
-                 target_update = 1e5,
+                 target_update = 10,
                  epsilon = 1.0,
                  epsilon_min = 0.1,
                  epsilon_decay = 0.99,
@@ -55,7 +54,7 @@ class DQNAgent:
         if not os.path.isdir(self.exp_dir):
             os.makedirs(self.exp_dir)
         
-        self.optimizer = torch.optim.Adam(self.model.parameters())
+        self.optimizer = torch.optim.RMSprop(self.model.parameters(), lr = 0.0001)
 
         self.device = 'cpu'
         if torch.cuda.is_available():
@@ -98,6 +97,35 @@ class DQNAgent:
             act_values = self.model(*state)
 
         return act_values.numpy().squeeze(axis = 0)
+
+    def calculate_error(self, state, valid_actions, action, reward,
+                        next_state, next_valid_actions, done):
+        
+        with torch.no_grad():
+            # Get target value
+            next_state = [torch.from_numpy(x).to(self.device) for x in next_state]
+            
+            next_target = self.target_model(*next_state).numpy()
+
+            next_target += ((1 - next_valid_actions) * -1e9)
+            next_target = np.amax(next_target, axis = 1)
+            
+            target = reward + ((1 - done) * (self.gamma * next_target))
+            target = target.reshape(-1, 1)
+
+            # Get the original state output
+            tmp_argmax = np.argmax(action, axis = 1)
+            indices = np.argmax(action + ((1 - valid_actions) * -1e-9), axis = 1)
+
+            state = [torch.from_numpy(x).to(self.device) for x in state]
+            pred = self.model(*state).gather(
+                1, torch.from_numpy(indices.reshape(-1, 1)))
+
+            # Update model
+            loss = F.smooth_l1_loss(pred,
+                                    torch.from_numpy(target).float().to(self.device))
+
+        return loss.item()
     
     def optimize(self, state, valid_actions, action, reward,
                  next_state, next_valid_actions, done):
@@ -113,27 +141,28 @@ class DQNAgent:
         
         target = reward + ((1 - done) * (self.gamma * next_target))
         target = target.reshape(-1, 1)
-        
+
         # Get the original state output
         indices = np.argmax(action + ((1 - valid_actions) * -1e-9), axis = 1)
 
         state = [torch.from_numpy(x).to(self.device) for x in state]
         pred = self.model(*state).gather(
             1, torch.from_numpy(indices.reshape(-1, 1)))
-
+    
+        
         # Update model
         loss = F.smooth_l1_loss(pred,
-                                torch.from_numpy(target).float().to(self.device))
+                                torch.from_numpy(target).float().to(self.device),
+                                reduction = 'none')
 
         # Optimize the model
         self.optimizer.zero_grad()
-        loss.backward()
+        loss.mean().backward()
         for param in self.model.parameters():
             param.grad.data.clamp_(-1, 1)
         self.optimizer.step()
-
-        return loss.item()
-
+        
+        return loss.detach().numpy(), loss.mean().item()
 
     def get_loss(self):
         if self.nsteps != 0:
@@ -175,16 +204,26 @@ class DQNAgent:
 
             while not done:
                 action = self.act(state, self.env)
+                action *= valid_actions
                 
                 next_state, next_valid_actions, reward, done, _ = self.env.step(action)
-                replay_buffer.append(dict(state = state, 
-                                     valid_actions = valid_actions, 
-                                     action = action, 
-                                     reward = reward, 
-                                     next_state = next_state, 
-                                     next_valid_actions = next_valid_actions, 
-                                     done = done))
-
+                
+                experience = dict(state = state,
+                                  valid_actions = valid_actions,
+                                  action = action,
+                                  reward = reward,
+                                  next_state = next_state,
+                                  next_valid_actions = next_valid_actions,
+                                  done = done)
+                
+                err_batch = replay_buffer.add_batch_dim(experience)
+                 
+                buffer_kwargs = {}
+                if replay_buffer.priority:
+                    error = self.calculate_error(**err_batch)
+                    buffer_kwargs['error'] = error
+                    
+                replay_buffer.append(experience, **buffer_kwargs)
 
                 if done:
                     print("episode: {}/{}, e: {:.2}, nsteps: {}, loss: {}"
@@ -195,15 +234,17 @@ class DQNAgent:
 
                 batch = replay_buffer.get_batch(self.batch_size)
 
-                loss = self.optimize(state = batch['state'], 
-                                     valid_actions = batch['valid_actions'], 
-                                     action = batch['action'], 
-                                     reward = batch['reward'],
-                                     next_state = batch['next_state'], 
-                                     next_valid_actions = batch['next_valid_actions'],
-                                     done = batch['done'])
+                item_loss, loss = self.optimize(state = batch['state'], 
+                                               valid_actions = batch['valid_actions'], 
+                                               action = batch['action'], 
+                                               reward = batch['reward'],
+                                               next_state = batch['next_state'], 
+                                               next_valid_actions = batch['next_valid_actions'],
+                                               done = batch['done'])
                 
-                 
+                if replay_buffer.priority:
+                    for idx, rb_idx in enumerate(batch['idx']):
+                        replay_buffer.update(rb_idx, item_loss[idx])
 
                 # Update losses
                 self.train_loss += loss

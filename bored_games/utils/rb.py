@@ -13,7 +13,11 @@ class ReplayBuffer:
     priority = False
 
     def __init__(self, N = 1000, path = None):
-        self.memory = deque(maxlen = N)
+        if path:
+            self.load(path)
+            self.N = self.memory.maxlen
+        else:
+            self.memory = deque(maxlen = N)
     
     def append(self, batch):
         self.memory.append(batch)
@@ -59,13 +63,21 @@ class ReplayBuffer:
 
         return minibatch
 
-    def organize_batch(self, minibatch):
-        batch_dict = {key: [] for key in minibatch[0].keys()}
+    def add_batch_dim(self, batch):
+        new_dict = {}
+
+        for key in batch.keys():
+            if isinstance(batch[key], tuple):
+                new_dict[key] = []
+                for item in batch[key]:
+                    new_dict[key].append(np.expand_dims(
+                        item, axis = 0))
+            else:
+                new_dict[key] = np.expand_dims(batch[key], axis = 0)
         
-        for batch in minibatch:
-            for key in batch_dict.keys():
-                batch_dict[key].append(batch[key])
-        
+        return new_dict
+
+    def stack(self, batch_dict):
         for key in batch_dict.keys():
             if isinstance(batch_dict[key][0], tuple):
                 batches = []
@@ -77,9 +89,24 @@ class ReplayBuffer:
 
         return batch_dict
 
+    def organize_batch(self, minibatch):
+        batch_dict = {key: [] for key in minibatch[0].keys()}
+        
+        for batch in minibatch:
+            for key in batch_dict.keys():
+                batch_dict[key].append(batch[key])
+
+        return self.stack(batch_dict)
+
     def save(self, path):
         if not os.path.isdir(path):
             os.makedirs(path)
 
         with open(os.path.join(path, 'rb.pkl'), 'wb') as handle:
             pickle.dump(self.memory, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+    def load(self, path):
+        assert(os.path.isfile(path))
+        with open(path, 'rb') as handle:
+            self.memory = pickle.load(handle)
+        print("Successfully loaded memory!")
