@@ -113,7 +113,7 @@ class DQNAgent:
 
             next_target += ((1 - next_valid_actions) * -1e9)
             next_target = np.amax(next_target, axis = 1)
-            
+
             target = reward + ((1 - done) * (self.gamma * next_target))
             target = target.reshape(-1, 1)
 
@@ -168,8 +168,7 @@ class DQNAgent:
         self.optimizer.step()
 
         if loss.mean().cpu().item() > 1000.0:
-            import pdb
-            pdb.set_trace()
+            print("Warning! Huge loss value")
         
         return loss.detach().cpu().numpy(), loss.mean().cpu().item()
 

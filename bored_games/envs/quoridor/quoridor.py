@@ -240,7 +240,8 @@ class Quoridor():
                 arr[count] = Wall((i, j), (i, j+1), (i, j+2))
                 count += 1
 
-        assert(count == self.max_wall_positions)
+        #assert(count == self.max_wall_positions)
+        # TODO: Keep asserts arround to remember for writing test
         
         return arr, np.asarray([[x.start, x.mid, x.end] for x in arr])
     
@@ -347,8 +348,9 @@ class Quoridor():
         return valid_walls
         
     def get_valid_actions(self, player):
-        actions = np.append(self.get_valid_walls(player), self.get_valid_moves(player))
-        actions = np.append(actions, 0)
+        actions = np.concatenate([self.get_valid_walls(player),
+                                  self.get_valid_moves(player),
+                                  [0]]).astype(np.uint8)
 
         if not np.any(actions[0:-1]):
             actions[-1] = 1
@@ -383,7 +385,7 @@ class Quoridor():
                     verbose_print("Moving {}".format(self.MOVEDIRS[idx]))
                     self.move_pawn(player, idx)
             else:
-                verbose_print("No moves to make!")
+                print("No moves to make!")
 
                 
             self.nmoves += 1
