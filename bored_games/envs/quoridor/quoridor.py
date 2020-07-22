@@ -9,7 +9,7 @@ from bored_games.envs.quoridor.lib import set_valid_walls
 from termcolor import colored, cprint
 
 def verbose_print(string):
-    if os.environ.get("VERBOSE") == 1:
+    if os.environ.get('VERBOSE', '0') == '1':
         print(string)
 
 class Player():
@@ -383,9 +383,7 @@ class Quoridor():
                     verbose_print("Moving {}".format(self.MOVEDIRS[idx]))
                     self.move_pawn(player, idx)
             else:
-                import pdb
-                pdb.set_trace()
-                print("No moves to make!")
+                verbose_print("No moves to make!")
 
                 
             self.nmoves += 1

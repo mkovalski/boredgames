@@ -11,7 +11,7 @@ import copy
 exp_dir = 'test_per'
 
 # Setup environment
-env = Quoridor(random_move_prob = True)
+env = Quoridor(set_move_prob = True)
 action_shape, state_shape = env.action_shape(), env.state_shape()
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
