@@ -69,9 +69,10 @@ def get_neighbors(i, j, board):
         loc = locs[idx]
         wall = walls[idx]
 
-        if 0 <= loc[0] < board.shape[0] and 0 <= loc[1] < board.shape[1] and \
-            board[wall[0], wall[1]] == -8 and board[loc[0], loc[1]] != -2:
+        if loc[0] < 0 or loc[0] >= board.shape[0] or loc[1] < 0 or loc[1] >= board.shape[1] or \
+            board[wall[0], wall[1]] != -8 or board[loc[0], loc[1]] == -2:
+                continue
 
-            ret_locs.append(loc)
+        ret_locs.append(loc)
 
     return ret_locs

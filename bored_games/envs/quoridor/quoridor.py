@@ -45,6 +45,7 @@ class Player():
         
         self.curr_loc[self.FACING[direction]] += self.MOVEINC[direction]
         
+        # Hop over opponent
         if board[self.curr_loc[0], self.curr_loc[1]] == self.opponent:
             self.move(direction, board, depth = depth + 1)
 
@@ -74,8 +75,6 @@ class Quoridor():
     NOWALL = -8
     WALL = 8
     
-    EXPLORED = -2 # For DFS
-
     DTYPE = np.int8
 
     PLAYER1 = 1
@@ -98,7 +97,8 @@ class Quoridor():
                  N = 9,
                  num_players = 2,
                  max_moves = 1000,
-                 set_move_prob = False):
+                 set_move_prob = False,
+                 normalize = True):
         '''
         Quoridor board game
         
@@ -110,6 +110,7 @@ class Quoridor():
             set_move_prob (bool): Allow environment to set a probability of moving pawn vs
                 placing a wall. Discrepency is pretty large (IE 128 walls to play vs 4 moves)
                 so try to balance exploration
+            normalize (bool): Use scaling of -1 to 1 for states
 
         '''
 
@@ -117,12 +118,14 @@ class Quoridor():
         assert(num_players == 2), "Only two players for now, support for 4 coming soon!"
         assert(max_moves > 0), "Need to play at least one move"
         assert(1 <= player <= num_players), "Pick a player between 1 and {}".format(num_players)
+        assert(isinstance(normalize, bool))
 
         self.player = player
         self.N = N
         self.num_players = num_players
         self.max_moves = max_moves
         self.set_move_prob = set_move_prob
+        self.normalize = normalize
         self.move_prob = None
         
         self.board = np.zeros((self.N*2-1, self.N*2-1), dtype = self.DTYPE)
@@ -139,7 +142,7 @@ class Quoridor():
         self.per_move_valid_walls = None
         self.nmoves = 0
     
-    def reset(self, move_opponent = True, move_priority = None):
+    def reset(self, move_opponent = True):
         '''
         Reset the environment
 
@@ -152,7 +155,6 @@ class Quoridor():
         self.done = False
         self.winner = None
         self.nmoves = 0
-        self.move_priority = move_priority
 
         # Clear board, setup wall spaces
         self.board[:] = self.OPEN
@@ -160,6 +162,8 @@ class Quoridor():
         self.board[:, 1::2] = self.NOWALL
         
         # Reset walls
+        # Valid walls is for all walls to be played
+        # Per move is those allowed per turn
         self.valid_walls = np.ones(self.max_wall_positions, dtype = np.uint8)
         self.per_move_valid_walls = np.ones(self.max_wall_positions, dtype = np.uint8)
         
@@ -169,6 +173,7 @@ class Quoridor():
             self.board[self.player_map[k].curr_loc[0], 
                        self.player_map[k].curr_loc[1]] = self.player_map[k].marker
         
+        # Set the probability of a move vs a wall set
         if self.set_move_prob:
             self.move_prob = np.random.random(self.num_players)
 
@@ -208,23 +213,25 @@ class Quoridor():
         tile_state = np.asarray([self.player_map[1].nmoves,
                       self.player_map[2].nmoves], dtype = np.float32)
         
-        # Normalize -1 to 1
-        tile_state /= self.player_map[1].MAX_MOVES
-        tile_state *= 2
-        tile_state -= 1
+        if self.normalize:
+            tile_state /= self.player_map[1].MAX_MOVES
+            tile_state *= 2
+            tile_state -= 1
         
         return tile_state
     
     def get_state(self):
+        '''Get the full state of the environment, includes board and number of tiles remaining'''
         board = np.copy(self.board)
-        # Normalize -1 to 1
-        board = 2 * ((board - self.NOWALL) / (self.WALL - self.NOWALL)) - 1
+        if self.normalize:
+            board = 2 * ((board - self.NOWALL) / (self.WALL - self.NOWALL)) - 1
 
         tile_state = self.get_tile_state()
         return board.reshape(1, *board.shape).astype(np.float32), \
             tile_state.reshape(*tile_state.shape).astype(np.float32)
 
     def __create_wall_array__(self):
+        '''Create an array of walls with all valid positions'''
         count = 0
         arr = [None] * self.max_wall_positions
 
@@ -246,11 +253,12 @@ class Quoridor():
         return arr, np.asarray([[x.start, x.mid, x.end] for x in arr])
     
     def get_valid_moves(self, player = None):
+        '''Determine which direction a player is able to move'''
+
         player = player if player else self.player
         opponent = 1 if player == 2 else 2
 
-        i = self.player_map[player].curr_loc[0]
-        j = self.player_map[player].curr_loc[1]
+        i, j = self.player_map[player].curr_loc
         
         # Left, up, right, down
         walls = [[i, j - 1], [i - 1, j], [i, j + 1], [i + 1, j]]
@@ -260,24 +268,29 @@ class Quoridor():
 
         ret = np.zeros(len(walls), dtype = np.uint8)
 
-        for i in range(len(locs)):
-            loc = locs[i]
-            wall = walls[i]
+        for idx in range(len(locs)):
+            loc = locs[idx]
+            wall = walls[idx]
             
-            if 0 <= loc[0] < self.board.shape[0] and 0 <= loc[1] < self.board.shape[1] and \
-                self.board[wall[0], wall[1]] == self.NOWALL and self.board[loc[0], loc[1]] != self.EXPLORED:
+            # If we can't move
+            if loc[0] < 0 or loc[0] >= self.board.shape[0] or loc[1] < 0 or loc[1] >= self.board.shape[1] or \
+                self.board[wall[0], wall[1]] == self.WALL:
+                continue
+            
+            # If we are doing this for a move, check if we can hop a player
+            if self.board[tuple(loc)] == opponent:
                 
-                # If we are doing this for a move, check if we can hop a player
-                if self.board[tuple(loc)] == opponent:
-                    test_loc = np.copy(np.asarray(loc)) + jump_locs[i] 
-                    test_wall = np.copy(np.asarray(wall)) + jump_locs[i]
-                    
-                    if 0 <= test_loc[0] < self.board.shape[0] and 0 <= test_loc[1] < self.board.shape[1] and \
-                        self.board[test_wall[0], test_wall[1]] == self.NOWALL:
-                        ret[i] = 1
+                test_loc = np.copy(np.asarray(loc)) + jump_locs[idx] 
+                test_wall = np.copy(np.asarray(wall)) + jump_locs[idx]
+                
+                if test_loc[0] < 0 or test_loc[0] >= self.board.shape[0] or test_loc[1] < 0 or test_loc[1] >= self.board.shape[1] or \
+                    self.board[test_wall[0], test_wall[1]] == self.WALL:
+                        continue
 
-                else:        
-                    ret[i] = 1
+                ret[idx] = 1
+
+            else:        
+                ret[idx] = 1
 
         return ret
 
@@ -324,7 +337,7 @@ class Quoridor():
                         self.expanded_wall_array, self.player_map[1].curr_loc,
                         self.player_map[2].curr_loc)
 
-        self.per_move_valid_walls *= self.valid_walls
+        self.per_move_valid_walls &= self.valid_walls
         
     def __add_wall__(self, wall):
         if self.board[wall.start] != self.NOWALL or self.board[wall.mid] != self.NOWALL or self.board[wall.end] != self.NOWALL:
@@ -351,29 +364,35 @@ class Quoridor():
         actions = np.concatenate([self.get_valid_walls(player),
                                   self.get_valid_moves(player),
                                   [0]]).astype(np.uint8)
-
+        
+        # TODO: Speed up case where no actions are available
         if not np.any(actions[0:-1]):
             actions[-1] = 1
+
         return actions
 
     def move_pawn(self, player, move):
+        '''Moves the player, arg checking done outside function'''
+        # Open up a space
         x, y = self.player_map[player].curr_loc
-        self.board[x, y] = 0
+        self.board[x, y] = self.OPEN
+
+        # Move to new space
         self.player_map[player].move(move, self.board)
         x, y = self.player_map[player].curr_loc
         self.board[x, y] = player
-   
+    
     def move(self, player, move):
         avail_moves = self.get_valid_actions(player)
         if not self.done:
-            move = move.astype(np.float32)
-            
             if avail_moves[-1] != 1:
+                move = move.astype(np.float32)
                 # Mask available moves as small neg value
                 move[np.where(avail_moves == 0)] = float('-inf')
 
                 idx = np.argmax(move)
-
+                
+                # Wall addition
                 if idx < self.max_wall_positions:
                     verbose_print("Place a wall at {}".format(self.wall_array[idx]))
                     self.__add_wall__(self.wall_array[idx])
@@ -384,9 +403,6 @@ class Quoridor():
                     idx = np.argmax(move[self.max_wall_positions:-1])
                     verbose_print("Moving {}".format(self.MOVEDIRS[idx]))
                     self.move_pawn(player, idx)
-            else:
-                print("No moves to make!")
-
                 
             self.nmoves += 1
             if self.nmoves == self.max_moves:
@@ -405,7 +421,7 @@ class Quoridor():
         Can choose to prefer moving over putting wall with some probability
         '''
 
-        player = player if player else self.player
+        player = self.player if not player else player
 
         valid_walls = self.get_valid_walls(player)
         valid_actions = self.get_valid_moves(player)
@@ -446,6 +462,7 @@ class Quoridor():
         return sample
 
     def render_ascii(self):
+        '''Small ascii rendering of current board state'''
         lines = ''
 
         for i in range(self.board.shape[0]):
@@ -469,6 +486,7 @@ class Quoridor():
             print(line + '\n')
 
     def render(self, eval_dir, image_idx):
+        '''Using pillow'''
         image = Image.new(mode='L', size=(450, 450), color=255)
         draw = ImageDraw.Draw(image)
 
@@ -536,6 +554,8 @@ class Quoridor():
         return self.get_state(), curr_valid_moves, self.get_reward(), self.done, 'nada'
 
 if __name__ == '__main__':
+    from tqdm import tqdm
+
     parser = argparse.ArgumentParser()
     parser.add_argument("-N", type = int, default = 9,
         help = "Shape of the board")
@@ -544,12 +564,12 @@ if __name__ == '__main__':
     player = 1
     game = Quoridor(player = player, N = args.N, )
     
-    # Player 1 goes first
-    game.reset(move_opponent = False)
+    for i in tqdm(range(1000)):
+        # Player 1 goes first
+        game.reset(move_opponent = False)
 
-    while not game.done:
-        sample = game.sample(player)
-        game.move(player, sample)
-        player = (player % 2) + 1
+        while not game.done:
+            sample = game.sample(player)
+            game.move(player, sample)
+            player = (player % 2) + 1
        
-    game.render_ascii()
