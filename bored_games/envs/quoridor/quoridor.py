@@ -463,7 +463,6 @@ class Quoridor():
 
     def render_ascii(self):
         '''Small ascii rendering of current board state'''
-        lines = ''
 
         for i in range(self.board.shape[0]):
             line = ''
@@ -482,9 +481,8 @@ class Quoridor():
                     line += colored(board_char, color)
                 else:
                     line += colored(self.board[i,j], color)
-
-            print(line + '\n')
-
+            print(line)
+        
     def render(self, eval_dir, image_idx):
         '''Using pillow'''
         image = Image.new(mode='L', size=(450, 450), color=255)

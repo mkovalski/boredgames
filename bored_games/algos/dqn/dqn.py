@@ -28,12 +28,12 @@ class DQNAgent:
                  target_model,
                  exp_dir,
                  resume = False,
-                 gamma = 0.999,
+                 gamma = 0.99,
                  batch_size = 64,
                  target_update = 10,
                  epsilon = 1.0,
                  epsilon_min = 0.1,
-                 epsilon_decay = 0.99,
+                 epsilon_decay = 0.999,
                  decay_steps = 10000):
                 
         self.env = env
@@ -205,6 +205,11 @@ class DQNAgent:
         prev_win = 0.0
         writer = SummaryWriter(self.exp_dir)
 
+        # Multiprocessing stuff
+        eval_process = None
+        eval_dict = {}
+        result_queue = mp.Queue()
+
         for e in range(1, episodes + 1):
             self.reset()
             state, valid_actions = self.env.reset()
@@ -269,16 +274,64 @@ class DQNAgent:
             if e % self.target_update == 0:
                 self.target_model.load_state_dict(self.model.state_dict())
 
-            # TODO: Separate process
             if e % eval_eps == 0:
-                win_percentage = self.evaluate(n_eval_games)
-                writer.add_scalar('Eval/win_percent', win_percentage, e)
-                torch.save(self.model,
-                           os.path.join(self.exp_dir,
-                                        '{}_{}'.format(
-                                            e, win_percentage)))
+                eval_process = self.check_eval_process(eval_process, result_queue, e, n_eval_games, writer)
+        
+        self.check_eval_process(eval_process, result_queue, e, n_eval_games, writer, start_new = False)
+        
+    def check_eval_process(self, eval_process, result_queue, episodes, n_eval_games, writer, start_new = True):
+            if eval_process is not None:
+                eval_process.join()
+                result_dict = result_queue.get()
+                print(" - Win percentage step {}: {}".format(
+                    result_dict['eval_steps'], result_dict['win_percentage']))
+                writer.add_scalar('Eval/win_percent', result_dict['win_percentage'], result_dict['eval_steps'])
+            
+            return_process = None
+            if start_new:
+                return_process = mp.Process(target = evaluate_dqn,
+                                          args = (copy.deepcopy(self.env),
+                                              copy.deepcopy(self.model),
+                                              n_eval_games,
+                                              episodes,
+                                              result_queue,
+                                              self.exp_dir))
+                return_process.start()
+            
+            return return_process
 
-def evaluate(model_path):
+def evaluate_dqn(env, model, num_games, eval_steps, result_queue, path):
+    '''Separate function so this can be done in a separate process'''
+    nwins = 0
+
+    # Single thread execution for pytorch
+    torch.set_num_threads(1)
+
+    for i in range(num_games):
+        state, _ = env.reset()
+        done = False
+
+        while not done:
+            state = [np.expand_dims(x, axis = 0) for x in state]
+            state = [torch.from_numpy(x).to('cpu') for x in state]
+            with torch.no_grad():
+                action = model(*state).cpu().numpy().squeeze(axis = 0)
+
+            state, _, reward, done, _ = env.step(action)
+            if done:
+                nwins += int(env.winner == 1)
+    
+    win_percentage = nwins / num_games
+    torch.save(model,
+               os.path.join(path,
+                            '{}_{}'.format(eval_steps, win_percentage)))
+    
+    result_queue.put(dict(win_percentage = win_percentage,
+                          eval_steps = eval_steps))
+
+def evaluate(model_path, render = 'ascii'):
+    assert(render in ['ascii', 'pillow'])
+    
     env = Quoridor(player = 1)
     board_shape, tile_shape = env.state_shape()
     action_shape = env.action_shape()
@@ -294,7 +347,7 @@ def evaluate(model_path):
 
     count = 0
 
-    env.render(eval_dir, count)
+    env.render_ascii(eval_dir, count)
 
     while not env.done:
         state = env.get_state()

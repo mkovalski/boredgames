@@ -4,11 +4,19 @@ from bored_games.envs.quoridor import Quoridor
 from bored_games.envs.quoridor.models import QuoridorDQN
 from bored_games.algos import DQNAgent
 from bored_games.utils import ReplayBuffer as RB
+from bored_games.utils import PrioritizedReplayBuffer as PRB
 import torch
 import os
 import copy
+import argparse
 
-exp_dir = 'test_rb'
+parser = argparse.ArgumentParser()
+parser.add_argument('--exp', type = str, required = True)
+parser.add_argument('--buffer', type = str, default = None)
+parser.add_argument('--buffer-size', type = int, default = 10000)
+parser.add_argument('--prioritized', action = 'store_true')
+
+args = parser.parse_args()
 
 # Setup environment
 env = Quoridor(set_move_prob = True)
@@ -27,18 +35,24 @@ target_model = QuoridorDQN(board_shape = state_shape[0],
                     output_shape = action_shape).to(device)
 
 # Create a new replay buffer and populate it
-rb = RB(N = 100000, path = 'test_rb/rb.pkl')
-#rb.populate(env)
-#rb.save(exp_dir)
+buffer_type = RB if not args.prioritized else PRB
 
+if args.buffer:
+    rb = buffer_type(N = None, path = args.buffer)
+else:
+    rb = buffer_type(N = args.buffer_size)
+    rb.populate(env)
+    rb.save(args.exp)
+        
 # DQN
 dqn = DQNAgent(env = env,
                model = model,
                target_model = target_model,
-               exp_dir = exp_dir,
-               target_update = 20,
-               batch_size = 512)
+               exp_dir = args.exp,
+               target_update = 50,
+               batch_size = 128)
 
 dqn.train(replay_buffer = rb,
           episodes = 100000,
-          eval_eps = 50)
+          eval_eps = 50,
+          n_eval_games = 100)
