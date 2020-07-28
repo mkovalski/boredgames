@@ -1,5 +1,7 @@
 # boredgames
 
+![Quoridor Example](images/example_quoridor.gif)
+
 Been playing lots of board games during this quarantined time, so I wanted to see if I can build
 some algorithms to beat me.
 
