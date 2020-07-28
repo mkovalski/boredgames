@@ -1,6 +1,6 @@
 # boredgames
 
-![Quoridor Example](images/example_quoridor.gif)
+![Quoridor Example](https://github.com/mkovalski/boredgames/blob/master/images/quoridor_example.gif)
 
 Been playing lots of board games during this quarantined time, so I wanted to see if I can build
 some algorithms to beat me.
