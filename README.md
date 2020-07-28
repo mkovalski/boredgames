@@ -2,8 +2,10 @@
 
 ![Quoridor Example](https://github.com/mkovalski/boredgames/blob/master/images/quoridor_example.gif)
 
-Been playing lots of board games during this quarantined time, so I wanted to see if I can build
-some algorithms to beat me.
+RL environments + algorithms for board games.
+
+
+## Environments
 
 The environments are similar to OpenAI Gym environments and can be used similarly, but they differ in two ways:
     - The reset and step take a "player" argument to signify which player you are moving as.
