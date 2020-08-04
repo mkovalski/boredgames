@@ -25,7 +25,6 @@ class DQNAgent:
     def __init__(self, 
                  env,
                  model,
-                 target_model,
                  exp_dir,
                  resume = False,
                  gamma = 0.99,
@@ -38,7 +37,7 @@ class DQNAgent:
                 
         self.env = env
         self.model = model
-        self.target_model = target_model
+        self.target_model = copy.deepcopy(self.model)
         self.exp_dir = exp_dir
 
         self.model_path = None

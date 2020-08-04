@@ -27,17 +27,17 @@ target_model = QuoridorDQN(board_shape = state_shape[0],
                     output_shape = action_shape).to(device)
 
 # Create a new replay buffer and populate it
-rb = PER(N = 100000, path = 'rbs/rb_1e6.pkl')
-#rb.populate(env)
-#rb.save(exp_dir)
+rb = PER(N = 100000)
+rb.populate(env)
+rb.save(exp_dir)
 
 # DQN
 dqn = DQNAgent(env = env,
                model = model,
                target_model = target_model,
                exp_dir = exp_dir,
-               target_update = 20,
-               batch_size = 512)
+               target_update = 100,
+               batch_size = 32)
 
 dqn.train(replay_buffer = rb,
           episodes = 10000,

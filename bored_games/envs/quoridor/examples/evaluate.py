@@ -18,7 +18,7 @@ parser.add_argument('--model', type = str, required = True)
 args = parser.parse_args()
 
 # Setup environment
-env = Quoridor(set_move_prob = False)
+env = Quoridor(set_move_prob = True)
 action_shape, state_shape = env.action_shape(), env.state_shape()
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -36,12 +36,16 @@ model.eval()
 # Eval time y'all
 env.reset(move_opponent = False)
 
-env.render_ascii()
+video_path = 'tmp'
+
+env.render(video_path, 0)
 
 curr_player = np.random.randint(1, 3)
 done = False
+count = 0
 
 while not env.done:
+    count += 1
     time.sleep(1)
 
     if curr_player != 1:
@@ -55,6 +59,6 @@ while not env.done:
         action = np.squeeze(action, axis = 0)
         env.move(curr_player, action)
 
-    env.render_ascii()
+    env.render(video_path, count)
     curr_player = (curr_player % 2) + 1
 

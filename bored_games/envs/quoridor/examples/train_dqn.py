@@ -15,6 +15,7 @@ parser.add_argument('--exp', type = str, required = True)
 parser.add_argument('--buffer', type = str, default = None)
 parser.add_argument('--buffer-size', type = int, default = 10000)
 parser.add_argument('--prioritized', action = 'store_true')
+parser.add_argument('--batch_size', type = int, default = 32)
 
 args = parser.parse_args()
 
@@ -30,10 +31,6 @@ model = QuoridorDQN(board_shape = state_shape[0],
                     output_shape = action_shape).to(device)
 print(model)
 
-target_model = QuoridorDQN(board_shape = state_shape[0],
-                    tile_shape = state_shape[1],
-                    output_shape = action_shape).to(device)
-
 # Create a new replay buffer and populate it
 buffer_type = RB if not args.prioritized else PRB
 
@@ -47,10 +44,9 @@ else:
 # DQN
 dqn = DQNAgent(env = env,
                model = model,
-               target_model = target_model,
                exp_dir = args.exp,
                target_update = 50,
-               batch_size = 128)
+               batch_size = args.batch_size)
 
 dqn.train(replay_buffer = rb,
           episodes = 100000,
