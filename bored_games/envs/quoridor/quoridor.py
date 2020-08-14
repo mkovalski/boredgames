@@ -214,7 +214,7 @@ class Quoridor():
         return (self.max_positions,)
     
     def state_shape(self):
-        return (1, *self.board.shape), (self.num_players,)
+        return (1, *self.board.shape), (self.NUMPLAYERS,)
     
     def get_tile_state(self):
         tile_state = np.copy(self.tile_state)
@@ -314,7 +314,6 @@ class Quoridor():
             sys.exit(1)
 
     def get_reward(self):
-        # TODO
         if self.winner[0] == 0:
             return 0
 
