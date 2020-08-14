@@ -28,29 +28,49 @@ class ReplayBuffer:
         if N > self.memory.maxlen:
             print("Cannot populate more memory than size of buffer, will populate {}".format(self.memory.maxlen))
             N = self.memory.maxlen
+        
+        donecount = env.NUMPLAYERS
 
-        done = True
+        queues = [deque(maxlen=2) for i in range(env.NUMPLAYERS)]
+
         print("Populating {} items...".format(N))
-
+        
         for i in tqdm(range(N)):
-            if done:
+            if donecount == env.NUMPLAYERS:
+                idx = 0
+                for q in queues:
+                    while q:
+                        q.pop()
+
                 state, valid_actions = env.reset()
-
+                done = False
+                donecount = 0
+            
             action = env.sample()
-            next_state, next_valid_actions, reward, done, _ = env.step(action)
+            
+            # For current player, get this information
+            queues[idx].append(dict(state = state,
+                                    valid_actions = valid_actions,
+                                    action = action,
+                                    reward = env.get_reward(),
+                                    done = done))
 
-            batch = dict(state = state,
-                         valid_actions = valid_actions,
-                         action = action,
-                         next_state = next_state,
-                         next_valid_actions = next_valid_actions,
-                         reward = reward,
-                         done = done)
+            if len(queues[idx]) == queues[idx].maxlen:
+                batch = dict(state = queues[idx][0]['state'],
+                             valid_actions = queues[idx][0]['valid_actions'],
+                             action = queues[idx][0]['action'],
+                             next_state = queues[idx][1]['state'],
+                             next_valid_actions = queues[idx][1]['valid_actions'],
+                             reward = queues[idx][1]['reward'],
+                             done = queues[idx][1]['done'])
+                self.memory.append(batch)
+            
+            if done:
+                donecount += 1
 
-            self.memory.append(batch)
-
-            state = next_state
-            valid_actions = next_valid_actions
+            state, valid_actions, _, done, _ = env.step(action)
+            
+            idx = (idx + 1) % env.NUMPLAYERS
 
     @property
     def maxlen(self):
